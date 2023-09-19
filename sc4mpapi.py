@@ -5,7 +5,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from socket import socket
 from threading import Thread
 
+
 SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
+
+SC4MP_BUFFER_SIZE = 4096
 
 
 def main():
@@ -55,67 +58,131 @@ class Scanner(Thread):
 
 		super().__init__()
 
-		self.servers = dict()
+		self.MAX_THREADS = 50
+
+		self.new_servers = dict()
+		self.servers = self.new_servers
+		self.server_queue = SC4MP_SERVERS.copy()
+		self.thread_count = 0
 		self.end = False
 
 	
 	def run(self):
 
-		server_queue = []
+		tried_servers = []
 
 		while not self.end:
 
 			try:
 
-				if len(server_queue) > 0:
+				if len(self.server_queue) > 0:
 
-					server = server_queue.pop(0)
+					if self.thread_count < self.MAX_THREADS:
 
-					print(f"Fetching server at {server[0]}:{server[1]}...")
+						server = self.server_queue.pop(0)
 
-					try:
-						server_id = self.request(server, ["server_id"]).decode()
-					except:
-						pass
+						if not server in tried_servers:
 
-					if len(server_id) > 0 and server_id not in self.servers:
-						self.servers[server_id] = dict()
-					else:
-						print("- failed!")
-						continue
+							print(f"Fetching server at {server[0]}:{server[1]}...")
 
-					print(f"- adding {server_id} to server list...")
+							fetcher = self.Fetcher(self, server)
+							fetcher.start()
 
-					self.servers[server_id]["host"] = server[0]
-					self.servers[server_id]["port"] = server[1]
+							self.thread_count += 1
 
-					print("- done")
+							tried_servers.append(server)
+					
+					time.sleep(.1)
 
 				else:
 
-					server_queue = SC4MP_SERVERS.copy()
+					if self.thread_count > 0:
+						time.sleep(10)
 
-				time.sleep(.1)
+					if not len(self.server_queue) > 0:
+
+						self.servers = self.new_servers
+						self.new_servers = dict()
+						self.server_queue = SC4MP_SERVERS.copy()
+						tried_servers = []
+
+						time.sleep(60)
+
 
 			except Exception as e:
 
 				print("ERROR: " + str(e))
 
-				time.sleep(1)	
+				time.sleep(10)	
 
 
-	def request(self, server, args):
+	class Fetcher(Thread):
 
-		s = socket()
 		
-		s.settimeout(5)
-		
-		s.connect((server[0], server[1]))	
-		
-		s.send(" ".join(args).encode())
+		def __init__(self, parent, server):
 
-		return s.recv(4096)
+			super().__init__()
 
+			self.parent = parent
+			self.server = server
+
+		
+		def run(self):
+
+			try:
+
+				entry = dict()
+
+				entry["host"] = self.server[0]
+				entry["port"] = self.server[1]
+
+				server_id = self.get("server_id")
+				server_version = self.get("server_version")
+
+				if (server_version[:3] == "0.3"):
+					self.server_list_3()
+
+				self.parent.new_servers[server_id] = entry
+
+			except Exception as e:
+
+				print(f"ERROR: {e}")
+
+			self.parent.thread_count -= 1
+
+
+		def socket(self):
+
+			s = socket()
+
+			s.settimeout(10)
+
+			s.connect(self.server)
+
+			return s
+
+
+		def get(self, request):
+
+			s = self.socket()
+
+			s.send(request.encode())
+
+			return s.recv(SC4MP_BUFFER_SIZE).decode()
+		
+
+		def server_list_3(self):
+			s = self.socket()
+			s.send(b"server_list")
+			size = int(s.recv(SC4MP_BUFFER_SIZE).decode())
+			s.send(b"ok")
+			for count in range(size):
+				host = s.recv(SC4MP_BUFFER_SIZE).decode()
+				s.send(b"ok")
+				port = int(s.recv(SC4MP_BUFFER_SIZE).decode())
+				s.send(b"ok")
+				self.parent.server_queue.append((host, port))
+		
 
 class RequestHandler(BaseHTTPRequestHandler):
     
