@@ -1,10 +1,10 @@
+from datetime import datetime
 import json
 import time
 from argparse import ArgumentParser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socket import socket
 from threading import Thread
-
 
 SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 
@@ -137,12 +137,15 @@ class Scanner(Thread):
 				entry["port"] = self.server[1]
 
 				server_id = self.get("server_id")
+
 				server_version = self.get("server_version")
 
 				if (server_version[:3] == "0.3"):
 					self.server_list_3()
 
-				self.parent.new_servers[server_id] = entry
+				entry["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+				self.parent.new_servers.setdefault(server_id, entry)
 
 			except Exception as e:
 
@@ -187,7 +190,8 @@ class Scanner(Thread):
 class RequestHandler(BaseHTTPRequestHandler):
     
 	def do_GET(self):
-		if (self.path == "/servers"):
+		path = self.path.split("/")
+		if (path[1] == "servers"):
 			self.send_response(200)
 			self.send_header("Content-type", "application/json")
 			self.end_headers()
