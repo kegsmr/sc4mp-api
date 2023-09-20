@@ -123,7 +123,7 @@ class Scanner(Thread):
 
 				except Exception as e:
 
-					print("ERROR: " + str(e))
+					print(f"[ERROR] {e}")
 
 					time.sleep(10)	
 
@@ -170,7 +170,7 @@ class Scanner(Thread):
 
 				except Exception as e:
 
-					print(f"ERROR: {e}")
+					print(f"[ERROR] {e}")
 
 				self.parent.thread_count -= 1
 
