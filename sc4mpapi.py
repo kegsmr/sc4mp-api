@@ -36,7 +36,7 @@ def main():
 
 	print("Webserver stopped.")
 
-	print("Ending scanner...")
+	print("Stopping scanner...")
 
 	sc4mp_scanner.end = True
 
@@ -69,51 +69,57 @@ class Scanner(Thread):
 	
 	def run(self):
 
-		tried_servers = []
+		try:
 
-		while not self.end:
+			tried_servers = []
 
-			try:
+			while not self.end:
 
-				if len(self.server_queue) > 0:
+				try:
 
-					if self.thread_count < self.MAX_THREADS:
+					if len(self.server_queue) > 0:
 
-						server = self.server_queue.pop(0)
+						if self.thread_count < self.MAX_THREADS:
 
-						if not server in tried_servers:
+							server = self.server_queue.pop(0)
 
-							print(f"Fetching server at {server[0]}:{server[1]}...")
+							if not server in tried_servers:
 
-							fetcher = self.Fetcher(self, server)
-							fetcher.start()
+								print(f"Fetching server at {server[0]}:{server[1]}...")
 
-							self.thread_count += 1
+								fetcher = self.Fetcher(self, server)
+								fetcher.start()
 
-							tried_servers.append(server)
-					
-					time.sleep(.1)
+								self.thread_count += 1
 
-				else:
+								tried_servers.append(server)
+						
+						time.sleep(.1)
 
-					if self.thread_count > 0:
-						time.sleep(10)
+					else:
 
-					if not len(self.server_queue) > 0:
+						if self.thread_count > 0:
+							time.sleep(10)
 
-						self.servers = self.new_servers
-						self.new_servers = dict()
-						self.server_queue = SC4MP_SERVERS.copy()
-						tried_servers = []
+						if not len(self.server_queue) > 0:
 
-						time.sleep(60)
+							self.servers = self.new_servers
+							self.new_servers = dict()
+							self.server_queue = SC4MP_SERVERS.copy()
+							tried_servers = []
+
+							time.sleep(60)
 
 
-			except Exception as e:
+				except Exception as e:
 
-				print("ERROR: " + str(e))
+					print("ERROR: " + str(e))
 
-				time.sleep(10)	
+					time.sleep(10)	
+
+		except KeyboardInterrupt:
+
+			pass
 
 
 	class Fetcher(Thread):
@@ -131,27 +137,36 @@ class Scanner(Thread):
 
 			try:
 
-				entry = dict()
+				try:
 
-				entry["host"] = self.server[0]
-				entry["port"] = self.server[1]
+					entry = dict()
 
-				server_id = self.get("server_id")
+					entry["host"] = self.server[0]
+					entry["port"] = self.server[1]
 
-				server_version = self.get("server_version")
+					entry["info"] = dict()
+					entry["stats"] = dict()
 
-				if (server_version[:3] == "0.3"):
-					self.server_list_3()
+					server_id = self.get("server_id")
 
-				entry["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+					server_version = self.get("server_version")
 
-				self.parent.new_servers.setdefault(server_id, entry)
+					if (server_version[:3] == "0.3"):
+						self.server_list_3()
 
-			except Exception as e:
+					entry["updated"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-				print(f"ERROR: {e}")
+					self.parent.new_servers.setdefault(server_id, entry)
 
-			self.parent.thread_count -= 1
+				except Exception as e:
+
+					print(f"ERROR: {e}")
+
+				self.parent.thread_count -= 1
+
+			except KeyboardInterrupt:
+
+				pass
 
 
 		def socket(self):
