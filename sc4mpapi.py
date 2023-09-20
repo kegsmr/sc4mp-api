@@ -1,10 +1,15 @@
-from datetime import datetime
 import json
+import sys
 import time
 from argparse import ArgumentParser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from inspect import stack
+from os import unlink
 from socket import socket
-from threading import Thread
+from threading import Thread, current_thread
+
+SC4MP_TITLE = "SC4MP API v1.0.0"
 
 SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 
@@ -14,6 +19,11 @@ SC4MP_BUFFER_SIZE = 4096
 def main():
 
 	args = parse_args()
+
+	sys.stdout = Logger()
+	current_thread().name = "Main"
+
+	print(SC4MP_TITLE)
 
 	print("Starting scanner...")
 
@@ -111,7 +121,7 @@ class Scanner(Thread):
 
 			except Exception as e:
 
-				print("ERROR: " + str(e))
+				print(f"[ERROR] {e}")
 
 				time.sleep(10)	
 
@@ -149,7 +159,7 @@ class Scanner(Thread):
 
 			except Exception as e:
 
-				print(f"ERROR: {e}")
+				print(f"[ERROR] {e}")
 
 			self.parent.thread_count -= 1
 
@@ -198,6 +208,77 @@ class RequestHandler(BaseHTTPRequestHandler):
 			self.wfile.write(json.dumps(sc4mp_scanner.servers, indent=4).encode())
 		else:
 			self.send_error(404)
+
+
+class Logger():
+	"""TODO"""
+	
+
+	def __init__(self):
+		"""TODO"""
+
+		self.terminal = sys.stdout
+		self.log = "sc4mpapi.log"
+		
+		try:
+			unlink(self.log)
+		except:
+			pass
+
+	def write(self, message):
+		"""TODO"""
+
+		output = message
+
+		if (message != "\n"):
+
+			# Timestamp
+			timestamp = datetime.now().strftime("[%H:%M:%S] ")
+
+			# Label
+			label = "[SC4MP/" + current_thread().getName() + "] "
+			for item in stack()[1:]:
+				try:
+					label += "(" + item[0].f_locals["self"].__class__.__name__ + ") "
+					break
+				except:
+					pass
+			
+
+			# Type and color
+			type = "[INFO] "
+			color = '\033[90m '
+			TYPES_COLORS = [
+				("[INFO] ", '\033[90m '), #'\033[94m '
+				("[PROMPT]", '\033[01m '),
+				("[WARNING] ", '\033[93m '),
+				("[ERROR] ", '\033[91m '),
+				("[FATAL] ", '\033[91m ')
+			]
+			for index in range(len(TYPES_COLORS)):
+				current_type = TYPES_COLORS[index][0]
+				current_color = TYPES_COLORS[index][1]
+				if (message[:len(current_type)] == current_type):
+					message = message[len(current_type):]
+					type = current_type
+					color = current_color
+					break
+			if (current_thread().getName() == "Main" and type == "[INFO] "):
+				color = '\033[00m '
+			
+			# Assemble
+			output = color + timestamp + label + type + message
+
+		# Print
+		self.terminal.write(output)
+		with open(self.log, "a") as log:
+			log.write(output)
+			log.close()  
+
+
+	def flush(self):
+		"""TODO"""
+		self.terminal.flush()
 
 
 if __name__ == "__main__":        
