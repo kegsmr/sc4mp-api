@@ -342,8 +342,9 @@ class Scanner(Thread):
 					# Set destination
 					destination = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, directory)
 
-					# Make destination directory
-					os.makedirs(destination)
+					# Make destination directory if it does not exist
+					if not os.path.exists(destination):
+						os.makedirs(destination)
 
 					# Create the socket
 					s = socket()
