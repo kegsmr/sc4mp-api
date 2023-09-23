@@ -436,8 +436,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 		if (path[1] == "servers"):
 			self.send_response(200)
 			self.send_header("Content-type", "application/json")
+			self.send_header("Access-Control-Allow-Origin", "*")
 			self.end_headers()
-			self.wfile.write(json.dumps(sc4mp_scanner.servers, indent=4).encode())
+			self.wfile.write(json.dumps(list(sc4mp_scanner.servers.values()), indent=4).encode())
 		else:
 			self.send_error(404)
 
