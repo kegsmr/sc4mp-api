@@ -443,10 +443,10 @@ class RequestHandler(BaseHTTPRequestHandler):
 			servers = []
 			for i in range(100):
 				entry = {}
-				entry["host"] = "TEST"
+				entry["host"] = "255.255.255.255"
 				entry["port"] = "7240"
 				entry["info"] = {
-					"server_name": "TEST",
+					"server_name": "XXXXXXXXXXXXXXXXXXXXXX",
 				}
 				mayors = random.randint(0, 10000)
 				online = random.randint(0, mayors)
