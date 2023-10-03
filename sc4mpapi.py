@@ -3,6 +3,7 @@ import os
 import shutil
 import struct
 import sys
+import random
 import time
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
@@ -432,16 +433,40 @@ class Scanner(Thread):
 class RequestHandler(BaseHTTPRequestHandler):
     
 	def do_GET(self):
-		path = self.path.split("/")
-		if (path[1] == "servers"):
+		path = self.path.split("/")[1:]
+		if (path == ["servers"]):
+			self.send_json(list(sc4mp_scanner.servers.values()))
+		elif (path == ["example-servers"]):
 			self.send_response(200)
-			self.send_header("Content-type", "application/json")
-			self.send_header("Access-Control-Allow-Origin", "*")
-			self.end_headers()
-			self.wfile.write(json.dumps(list(sc4mp_scanner.servers.values()), indent=4).encode())
+			servers = []
+			for i in range(100):
+				entry = {}
+				entry["host"] = "TEST"
+				entry["port"] = "7240"
+				entry["info"] = {
+					"server_name": "TEST",
+				}
+				mayors = random.randint(0, 10000)
+				online = random.randint(0, mayors)
+				claimed = random.uniform(0, 1)
+				download = random.randint(0, 10000000000)
+				entry["stats"] = {
+					"stat_mayors": mayors,
+					"stat_mayors_online": online,
+					"stat_claimed": claimed,
+					"stat_download": download,
+				}
+				servers.append(entry)
+			self.send_json(servers)
 		else:
 			self.send_error(404)
 
+	def send_json(self, data):
+		self.send_response(200)
+		self.send_header("Content-type", "application/json")
+		self.send_header("Access-Control-Allow-Origin", "*")
+		self.end_headers()
+		self.wfile.write(json.dumps(data, indent=4).encode())
 
 class Logger():
 	"""TODO"""
