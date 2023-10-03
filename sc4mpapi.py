@@ -433,7 +433,9 @@ class Scanner(Thread):
 class RequestHandler(BaseHTTPRequestHandler):
     
 	def do_GET(self):
-		path = self.path.split("/")[1:]
+		path = self.path.split("/")
+		while "" in path:
+			path.remove("")
 		if (path == ["servers"]):
 			self.send_json(list(sc4mp_scanner.servers.values()))
 		elif (path == ["example-servers"]):
