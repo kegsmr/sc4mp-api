@@ -133,7 +133,7 @@ class Scanner(Thread):
 
 							if not server in tried_servers:
 
-								print(f"Fetching server at {server[0]}:{server[1]}...")
+								#print(f"Fetching server at {server[0]}:{server[1]}...")
 
 								fetcher = self.Fetcher(self, server)
 								fetcher.start()
@@ -194,6 +194,8 @@ class Scanner(Thread):
 
 		
 		def run(self):
+
+			print(f"Fetching server at {self.server[0]}:{self.server[1]}...")
 
 			try:
 
