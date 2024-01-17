@@ -78,6 +78,22 @@ def get_bitmap_dimensions(filename):
 	return (width[0], height[0])
 
 
+def send_json(s, data):
+	"""TODO"""
+	s.sendall(json.dumps(data).encode())
+
+
+def recv_json(s):
+	"""TODO"""
+	data = ""
+	while True:
+		data += s.recv(SC4MP_BUFFER_SIZE).decode()
+		try:
+			return json.loads(data)
+		except json.decoder.JSONDecodeError:
+			pass
+
+
 class Scanner(Thread):
 
 
@@ -155,7 +171,6 @@ class Scanner(Thread):
 
 								break
 
-
 				except Exception as e:
 
 					print(f"[ERROR] {e}")
@@ -202,6 +217,11 @@ class Scanner(Thread):
 						entry["info"] = self.server_info_3()
 						if not entry["info"]["private"]:
 							entry["stats"] = self.server_stats_3(server_id)
+					else:
+						self.server_list()
+						entry["info"] = self.server_info()
+						if not entry["info"]["private"]:
+							entry["stats"] = self.server_stats(server_id)	
 
 				except Exception as e:
 
@@ -349,7 +369,7 @@ class Scanner(Thread):
 
 					# Create the socket
 					s = socket()
-					s.settimeout(10)
+					s.settimeout(30)
 					s.connect(self.server)
 
 					# Request the type of data
@@ -430,6 +450,191 @@ class Scanner(Thread):
 			return entry
 
 
+		def server_list(self):
+
+			# Create socket
+			s = self.socket()
+			
+			# Request server list
+			s.send(b"server_list")
+			
+			# Receive server list
+			servers = recv_json(s)
+
+			# Loop through server list and append them to the unfetched servers
+			for host, port in servers:
+				self.parent.server_queue.append((host, port))
+		
+
+		def server_info(self):
+
+			return json.loads(self.get("info"))
+
+
+		def server_stats(self, server_id):
+
+
+			def load_json(filename):
+				"""Returns data from a json file as a dictionary."""
+				try:
+					with open(filename, 'r') as file:
+						data = json.load(file)
+						if data == None:
+							return dict()
+						else:
+							return data
+				except FileNotFoundError:
+					return dict()
+
+
+			def fetch_temp():
+				"""TODO"""
+
+				REQUESTS = ["plugins", "regions"]
+				DIRECTORIES = ["Plugins", "Regions"]
+
+				total_size = 0
+
+				for request, directory in zip(REQUESTS, DIRECTORIES):
+
+					# Set destination
+					destination = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, directory)
+
+					# Create the socket
+					s = self.socket()
+
+					# Request the type of data
+					s.send(request.encode())
+
+					# Receive file table
+					file_table = recv_json(s)
+
+					# Get total download size
+					size = sum([entry[1] for entry in file_table])
+
+					# Prune file table as necessary
+					ft = []
+					for entry in file_table:
+						filename = Path(entry[2]).name
+						if filename in ["region.json", "config.bmp"]:
+							ft.append(entry)
+					file_table = ft
+
+					# Send pruned file table
+					send_json(s, file_table)
+
+					# Receive files
+					for entry in file_table:
+
+						# Get necessary values from entry
+						filesize = entry[1]
+						relpath = Path(entry[2])
+
+						# Set the destination
+						d = Path(destination) / relpath
+
+						# Create the destination directory if necessary
+						d.parent.mkdir(parents=True, exist_ok=True)
+
+						# Delete the destination file if it exists
+						d.unlink(missing_ok=True)
+
+						# Receive the file. Write to both the destination and cache
+						filesize_read = 0
+						with d.open("wb") as dest:
+							while filesize_read < filesize:
+								filesize_remaining = filesize - filesize_read
+								buffersize = SC4MP_BUFFER_SIZE if filesize_remaining > SC4MP_BUFFER_SIZE else filesize_remaining
+								bytes_read = s.recv(buffersize)
+								if not bytes_read:
+									break
+								dest.write(bytes_read)
+								filesize_read += len(bytes_read)
+
+					total_size += size
+
+				return total_size
+				
+
+			def time():
+				"""TODO"""
+
+				try:
+
+					s = socket()
+					s.settimeout(10)
+					s.connect((self.server[0], self.server[1]))
+					s.send(b"time")
+
+					return datetime.strptime(s.recv(SC4MP_BUFFER_SIZE).decode(), "%Y-%m-%d %H:%M:%S")
+				
+				except Exception as e:
+
+					print(f"[ERROR] {e}") #show_error(e, no_ui=True)
+
+					return datetime.now()
+
+
+			entry = dict()
+
+			download = fetch_temp()
+
+			regions_path = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, "Regions")
+
+			server_time = time()
+
+			mayors = []
+			mayors_online = []
+			claimed_area = 0
+			total_area = 0
+			for region in os.listdir(regions_path):
+				try:
+					region_path = os.path.join(regions_path, region)
+					region_config_path = os.path.join(region_path, "config.bmp")
+					region_dimensions = get_bitmap_dimensions(region_config_path)
+					region_database_path = os.path.join(region_path, "_Database", "region.json")
+					region_database = load_json(region_database_path)
+					for coords in region_database.keys():
+						city_entry = region_database[coords]
+						if city_entry != None:
+							owner = city_entry["owner"]
+							if (owner != None):
+								claimed_area += city_entry["size"] ** 2
+								if (owner not in mayors):
+									mayors.append(owner)
+								modified = city_entry["modified"]
+								if (modified != None):
+									modified = datetime.strptime(modified, "%Y-%m-%d %H:%M:%S")
+									if (modified > server_time - timedelta(minutes=60) and owner not in mayors_online):
+										mayors_online.append(owner)
+					total_area += region_dimensions[0] * region_dimensions[1]
+				except Exception as e:
+					pass #show_error(e, no_ui=True)
+
+			stat_mayors = len(mayors) #(random.randint(0,1000))
+			
+			stat_mayors_online = len(mayors_online)
+			
+			try:
+				stat_claimed = (float(claimed_area) / float(total_area)) #(float(random.randint(0, 100)) / 100)
+			except ZeroDivisionError:
+				stat_claimed = 1
+
+			stat_download = download #(random.randint(0, 10 ** 11))
+
+			entry["stat_mayors"] = stat_mayors
+			entry["stat_mayors_online"] = stat_mayors_online
+			entry["stat_claimed"] = stat_claimed
+			entry["stat_download"] = stat_download
+
+			try:
+				shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
+			except:
+				pass
+
+			return entry
+
+
 class RequestHandler(BaseHTTPRequestHandler):
     
 	def do_GET(self):
@@ -447,6 +652,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 				entry["port"] = "7240"
 				entry["info"] = {
 					"server_name": "XXXXXXXXXXXXXXXXXXXXXX",
+					"password_enabled": random.choice([True, False])
 				}
 				mayors = random.randint(0, 10000)
 				online = random.randint(0, mayors)
@@ -469,6 +675,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 		self.send_header("Access-Control-Allow-Origin", "*")
 		self.end_headers()
 		self.wfile.write(json.dumps(data, indent=4).encode())
+
 
 class Logger():
 	"""TODO"""
