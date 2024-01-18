@@ -4,6 +4,7 @@ import shutil
 import struct
 import sys
 import random
+import traceback
 import time
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
@@ -94,6 +95,17 @@ def recv_json(s):
 			pass
 
 
+def show_error(e):
+	"""TODO"""
+	message = None
+	if isinstance(e, str):
+		message = e
+	else: 
+		message = str(e)
+
+	print("[ERROR] " + message + "\n\n" + traceback.format_exc())
+
+
 class Scanner(Thread):
 
 
@@ -105,8 +117,8 @@ class Scanner(Thread):
 
 		try:
 			shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList"))
-		except:
-			pass
+		except Exception as e:
+			show_error(e)
 
 		self.new_servers = dict()
 		self.servers = self.new_servers
@@ -173,7 +185,7 @@ class Scanner(Thread):
 
 				except Exception as e:
 
-					print(f"[ERROR] {e}")
+					show_error(e)
 
 					time.sleep(10)	
 
@@ -227,7 +239,7 @@ class Scanner(Thread):
 
 				except Exception as e:
 
-					print(f"[ERROR] {e}")
+					show_error(e)
 
 				self.parent.thread_count -= 1
 
@@ -426,7 +438,7 @@ class Scanner(Thread):
 										mayors_online.append(owner)
 					total_area += region_dimensions[0] * region_dimensions[1]
 				except Exception as e:
-					pass #show_error(e, no_ui=True)
+					show_error(e) #pass
 
 			stat_mayors = len(mayors) #(random.randint(0,1000))
 			
@@ -446,8 +458,8 @@ class Scanner(Thread):
 
 			try:
 				shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
-			except:
-				pass
+			except Exception as e:
+				show_error(e)
 
 			return entry
 
@@ -541,7 +553,7 @@ class Scanner(Thread):
 						# Delete the destination file if it exists
 						d.unlink(missing_ok=True)
 
-						# Receive the file. Write to both the destination and cache
+						# Receive the file
 						filesize_read = 0
 						with d.open("wb") as dest:
 							while filesize_read < filesize:
@@ -572,7 +584,7 @@ class Scanner(Thread):
 				
 				except Exception as e:
 
-					print(f"[ERROR] {e}") #show_error(e, no_ui=True)
+					show_error(e)
 
 					return datetime.now()
 
@@ -611,7 +623,7 @@ class Scanner(Thread):
 										mayors_online.append(owner)
 					total_area += region_dimensions[0] * region_dimensions[1]
 				except Exception as e:
-					pass #show_error(e, no_ui=True)
+					show_error(e) #pass
 
 			stat_mayors = len(mayors) #(random.randint(0,1000))
 			
@@ -631,8 +643,8 @@ class Scanner(Thread):
 
 			try:
 				shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
-			except:
-				pass
+			except Exception as e:
+				show_error(e)
 
 			return entry
 
