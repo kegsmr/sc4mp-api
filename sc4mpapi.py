@@ -174,6 +174,13 @@ class Scanner(Thread):
 							
 							else:
 
+								for server_id in self.new_servers.keys():
+									if "stats" not in self.new_servers[server_id].keys():
+										try:
+											self.new_servers[server_id]["stats"] = self.servers[server_id]["stats"]
+										except:
+											pass
+
 								self.servers = self.new_servers
 								self.new_servers = dict()
 								self.server_queue = SC4MP_SERVERS.copy()
