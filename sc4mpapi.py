@@ -186,7 +186,7 @@ class Scanner(Thread):
 								self.server_queue = SC4MP_SERVERS.copy()
 								tried_servers = []
 
-								time.sleep(60)
+								time.sleep(300) #60
 
 								break
 
