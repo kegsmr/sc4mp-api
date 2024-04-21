@@ -6,6 +6,7 @@ import sys
 import random
 import traceback
 import time
+#import ssl
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -40,6 +41,7 @@ def main():
 	print("Starting webserver...")
 
 	webserver = HTTPServer((args.host, int(args.port)), RequestHandler)
+	#webserver.socket = ssl.wrap_socket (webserver.socket, keyfile="key.pem", certfile='cert.pem', server_side=True)
 
 	print("Webserver started on http://%s:%s" % (args.host, args.port))
 
