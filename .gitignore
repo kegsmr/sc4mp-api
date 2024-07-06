@@ -1,6 +1,4 @@
 _SC4MP
-cert.pem
-key.pem
-run.bat
-*.log
 *__pycache__
+*.bat
+*.log

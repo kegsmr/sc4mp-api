@@ -16,7 +16,8 @@ from pathlib import Path
 from socket import socket
 from threading import Thread, current_thread
 
-SC4MP_TITLE = "SC4MP API v1.0.0"
+
+SC4MP_TITLE = "SC4MP API"
 
 SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 
@@ -70,7 +71,6 @@ def parse_args():
 
 
 def get_bitmap_dimensions(filename):
-	"""TODO"""
 
 	with open(filename, "rb") as file:
 		data = bytearray(file.read())
@@ -82,12 +82,12 @@ def get_bitmap_dimensions(filename):
 
 
 def send_json(s, data):
-	"""TODO"""
+	
 	s.sendall(json.dumps(data).encode())
 
 
 def recv_json(s):
-	"""TODO"""
+	
 	data = ""
 	while True:
 		data += s.recv(SC4MP_BUFFER_SIZE).decode()
@@ -98,7 +98,7 @@ def recv_json(s):
 
 
 def show_error(e):
-	"""TODO"""
+	
 	message = None
 	if isinstance(e, str):
 		message = e
@@ -511,7 +511,7 @@ class Scanner(Thread):
 
 
 			def fetch_temp():
-				"""TODO"""
+				
 
 				REQUESTS = ["plugins", "regions"]
 				DIRECTORIES = ["Plugins", "Regions"]
@@ -580,7 +580,7 @@ class Scanner(Thread):
 				
 
 			def time():
-				"""TODO"""
+				
 
 				try:
 
@@ -701,11 +701,11 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 
 class Logger():
-	"""TODO"""
+	
 	
 
 	def __init__(self):
-		"""TODO"""
+		
 
 		self.terminal = sys.stdout
 		self.log = "sc4mpapi.log"
@@ -716,7 +716,7 @@ class Logger():
 			pass
 
 	def write(self, message):
-		"""TODO"""
+		
 
 		output = message
 
@@ -767,7 +767,7 @@ class Logger():
 
 
 	def flush(self):
-		"""TODO"""
+		
 		self.terminal.flush()
 
 
