@@ -81,12 +81,12 @@ def get_bitmap_dimensions(filename):
 	return (width[0], height[0])
 
 
-def send_json(s, data):
+"""def send_json(s, data):
 	
-	s.sendall(json.dumps(data).encode())
+	s.sendall(json.dumps(data).encode())"""
 
 
-def recv_json(s):
+"""def recv_json(s):
 	
 	data = ""
 	while True:
@@ -94,7 +94,7 @@ def recv_json(s):
 		try:
 			return json.loads(data)
 		except json.decoder.JSONDecodeError:
-			pass
+			pass"""
 
 
 def show_error(e):
