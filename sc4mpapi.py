@@ -15,7 +15,7 @@ from pathlib import Path
 from socket import socket
 from threading import Thread, current_thread
 
-from core.networking import *
+from core.networking import send_json, recv_json
 
 
 SC4MP_TITLE = "SC4MP API"
