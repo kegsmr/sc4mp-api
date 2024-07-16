@@ -492,7 +492,7 @@ class Scanner(Thread):
 
 		def server_info(self):
 
-			return json.loads(self.get("info"))
+			return json.loads(self.get("info")[4:])
 
 
 		def server_stats(self, server_id):
