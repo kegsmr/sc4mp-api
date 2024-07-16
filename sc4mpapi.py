@@ -6,7 +6,6 @@ import sys
 import random
 import traceback
 import time
-#import ssl
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -15,6 +14,8 @@ from os import unlink
 from pathlib import Path
 from socket import socket
 from threading import Thread, current_thread
+
+from core.networking import *
 
 
 SC4MP_TITLE = "SC4MP API"
