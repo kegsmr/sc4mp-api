@@ -227,6 +227,7 @@ class Scanner(Thread):
 
 					entry["host"] = self.server[0]
 					entry["port"] = self.server[1]
+					entry["url"] = f"sc4mp://{entry['host']}:{entry['port']}"
 
 					server_id = self.get("server_id")
 					server_version = self.get("server_version")
