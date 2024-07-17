@@ -45,7 +45,7 @@ def main():
 	webserver = HTTPServer((args.host, int(args.port)), RequestHandler)
 	#webserver.socket = ssl.wrap_socket (webserver.socket, keyfile="key.pem", certfile='cert.pem', server_side=True)
 
-	print("Webserver started on http://%s:%s" % (args.host, args.port))
+	print(f"Webserver started on http://localhost:{args.port}")
 
 	try:
 		webserver.serve_forever()
@@ -659,7 +659,7 @@ class Scanner(Thread):
 			try:
 				shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
 			except Exception as e:
-				show_error(e)
+				pass
 
 			return entry
 
