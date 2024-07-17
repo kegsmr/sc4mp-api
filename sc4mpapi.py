@@ -267,7 +267,7 @@ class Scanner(Thread):
 
 			s = socket()
 
-			s.settimeout(10)
+			s.settimeout(60)
 
 			s.connect(self.server)
 
