@@ -248,9 +248,9 @@ class Scanner(Thread):
 						if not entry["info"]["private"]:
 							entry["stats"] = self.server_stats(server_id)	
 
-				except socket.timeout:
+				#except socket.timeout:
 
-					pass
+				#	pass
 
 				except Exception as e:
 
@@ -267,7 +267,7 @@ class Scanner(Thread):
 
 			s = socket()
 
-			s.settimeout(60)
+			s.settimeout(30)
 
 			s.connect(self.server)
 
@@ -499,8 +499,12 @@ class Scanner(Thread):
 		
 
 		def server_info(self):
-
-			return json.loads(self.get("info")[4:])
+			
+			s = self.socket()
+			
+			s.send(b"info")
+			
+			return recv_json(s)
 
 
 		def server_stats(self, server_id):
@@ -594,7 +598,7 @@ class Scanner(Thread):
 				try:
 
 					s = socket()
-					s.settimeout(10)
+					s.settimeout(30)
 					s.connect((self.server[0], self.server[1]))
 					s.send(b"time")
 
@@ -722,6 +726,7 @@ class Logger():
 			unlink(self.log)
 		except:
 			pass
+
 
 	def write(self, message):
 		
