@@ -121,7 +121,7 @@ class Scanner(Thread):
 		try:
 			shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList"))
 		except Exception as e:
-			show_error(e)
+			pass
 
 		self.new_servers = dict()
 		self.servers = self.new_servers
@@ -247,6 +247,10 @@ class Scanner(Thread):
 						entry["info"] = self.server_info()
 						if not entry["info"]["private"]:
 							entry["stats"] = self.server_stats(server_id)	
+
+				except socket.timeout:
+
+					pass
 
 				except Exception as e:
 
