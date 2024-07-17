@@ -163,7 +163,7 @@ class Scanner(Thread):
 
 						count = 0
 
-						while True:
+						while not self.end:
 
 							if len(self.server_queue) > 0:
 
@@ -189,7 +189,7 @@ class Scanner(Thread):
 								self.server_queue = SC4MP_SERVERS.copy()
 								tried_servers = []
 
-								time.sleep(300) #60
+								time.sleep(60) #300
 
 								break
 
