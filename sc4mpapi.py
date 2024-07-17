@@ -118,11 +118,6 @@ class Scanner(Thread):
 
 		self.MAX_THREADS = 50
 
-		try:
-			shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList"))
-		except Exception as e:
-			pass
-
 		self.new_servers = dict()
 		self.servers = self.new_servers
 		self.server_queue = SC4MP_SERVERS.copy()
@@ -176,6 +171,11 @@ class Scanner(Thread):
 								time.sleep(10)
 							
 							else:
+
+								try:
+									shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList"))
+								except Exception as e:
+									pass
 
 								for server_id in self.new_servers.keys():
 									if "stats" not in self.new_servers[server_id].keys():
