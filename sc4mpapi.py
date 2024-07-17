@@ -382,6 +382,9 @@ class Scanner(Thread):
 					# Return the file size
 					return filesize
 
+				if os.path.exists(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
+					raise Exception()
+
 				REQUESTS = [b"plugins", b"regions"]
 				DIRECTORIES = ["Plugins", "Regions"]
 
@@ -602,7 +605,6 @@ class Scanner(Thread):
 					show_error(e)
 
 					return datetime.now()
-
 
 			entry = dict()
 
