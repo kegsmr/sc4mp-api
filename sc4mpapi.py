@@ -248,9 +248,9 @@ class Scanner(Thread):
 						if not entry["info"]["private"]:
 							entry["stats"] = self.server_stats(server_id)	
 
-				#except socket.timeout:
+				except TimeoutError:
 
-				#	pass
+					print("[WARNING] Server timed out.")
 
 				except Exception as e:
 
