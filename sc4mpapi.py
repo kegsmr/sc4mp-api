@@ -36,7 +36,14 @@ def main():
 
 	print("Starting scanner...")
 
-	global sc4mp_scanner
+	global sc4mp_scanner, sc4mp_proxy, socks
+
+	sc4mp_proxy = (args.proxy_host, int(args.proxy_port))
+	if None in sc4mp_proxy:
+		sc4mp_proxy = None
+	else:
+		import socks
+
 	sc4mp_scanner = Scanner()
 	sc4mp_scanner.start()
 
@@ -67,6 +74,8 @@ def parse_args():
 
 	parser.add_argument("host")
 	parser.add_argument("port")
+	parser.add_argument("-r", "--proxy-host",  required=False)
+	parser.add_argument("-o", "--proxy-port", required=False)
 	
 	return parser.parse_args()
 
@@ -263,9 +272,16 @@ class Scanner(Thread):
 				pass
 
 
-		def socket(self):
+		def socket(self, use_proxy=True):
 
-			s = socket()
+			if not use_proxy or sc4mp_proxy is None:
+				s = socket()
+			else:
+				try:
+					s = socks.socksocket()
+					s.set_proxy(socks.SOCKS5, sc4mp_proxy[0], sc4mp_proxy[1])
+				except (socks.SOCKS5Error, socks.GeneralProxyError):
+					return self.socket(use_proxy=False)
 
 			s.settimeout(30)
 
@@ -400,9 +416,10 @@ class Scanner(Thread):
 						os.makedirs(destination)
 
 					# Create the socket
-					s = socket()
-					s.settimeout(30)
-					s.connect(self.server)
+					s = self.socket()
+					#s = socket()
+					#s.settimeout(30)
+					#s.connect(self.server)
 
 					# Request the type of data
 					s.send(request)
@@ -597,9 +614,10 @@ class Scanner(Thread):
 
 				try:
 
-					s = socket()
-					s.settimeout(30)
-					s.connect((self.server[0], self.server[1]))
+					s = self.socket()
+					#s = socket()
+					#s.settimeout(30)
+					#s.connect((self.server[0], self.server[1]))
 					s.send(b"time")
 
 					return datetime.strptime(s.recv(SC4MP_BUFFER_SIZE).decode(), "%Y-%m-%d %H:%M:%S")
