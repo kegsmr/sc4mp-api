@@ -16,7 +16,8 @@ from socket import socket
 from threading import Thread, current_thread
 
 try:
-	from flask import Flask
+	from flask import Flask, jsonify, abort
+	app = Flask(__name__)
 	sc4mp_has_flask = True
 except ImportError:
 	sc4mp_has_flask = False
@@ -60,20 +61,37 @@ def main():
 
 	print("Starting webserver...")
 
-	app = Flask(__name__)
-	#webserver = HTTPServer((args.host, int(args.port)), RequestHandler)
-	#webserver.socket = ssl.wrap_socket (webserver.socket, keyfile="key.pem", certfile='cert.pem', server_side=True)
+	if sc4mp_has_flask:
 
-	print(f"Webserver started on http://localhost:{args.port}")
+		print(f"Webserver started on http://localhost:{args.port}")
 
-	try:
-		webserver.serve_forever()
-	except KeyboardInterrupt:
-		pass
+		try:
+			app.run(host=args.host, port=int(args.port))
+		except KeyboardInterrupt:
+			pass
 
-	webserver.server_close()
+		print("Webserver stopped.")
 
-	print("Webserver stopped.")
+	else:
+
+		print("[WARNING] Flask is unavailable. Webserver cannot start.")
+
+		try:
+			while True:
+				time.sleep(.1)
+		except KeyboardInterrupt:
+			pass
+
+	# webserver = HTTPServer((args.host, int(args.port)), RequestHandler)
+
+	# print(f"Webserver started on http://localhost:{args.port}")
+
+	# try:
+	# 	webserver.serve_forever()
+	# except KeyboardInterrupt:
+	# 	pass
+
+	# webserver.server_close()
 
 	print("Stopping scanner...")
 
@@ -112,6 +130,23 @@ def show_error(e):
 		message = str(e)
 
 	print("[ERROR] " + message + "\n\n" + traceback.format_exc())
+
+
+@app.route("/servers", methods=["GET"])
+def get_servers():
+
+	return jsonify(list(sc4mp_scanner.servers.values()))
+
+
+@app.route("/servers/<server_id>", methods=["GET"])
+def get_server(server_id):
+
+    server = sc4mp_scanner.servers.get(server_id)
+    
+    if server is None:
+        abort(404)
+    
+    return jsonify(server)
 
 
 class Scanner(Thread):
@@ -684,50 +719,49 @@ class Scanner(Thread):
 			return entry
 
 
-class RequestHandler(BaseHTTPRequestHandler):
+# class RequestHandler(BaseHTTPRequestHandler):
     
-	def do_GET(self):
-		path = self.path.split("/")
-		while "" in path:
-			path.remove("")
-		if (path == ["servers"]):
-			self.send_json(list(sc4mp_scanner.servers.values()))
-		elif (path == ["example-servers"]):
-			self.send_response(200)
-			servers = []
-			for i in range(100):
-				entry = {}
-				entry["host"] = "255.255.255.255"
-				entry["port"] = "7240"
-				entry["info"] = {
-					"server_name": "XXXXXXXXXXXXXXXXXXXXXX",
-					"password_enabled": random.choice([True, False])
-				}
-				mayors = random.randint(0, 10000)
-				online = random.randint(0, mayors)
-				claimed = random.uniform(0, 1)
-				download = random.randint(0, 10000000000)
-				entry["stats"] = {
-					"stat_mayors": mayors,
-					"stat_mayors_online": online,
-					"stat_claimed": claimed,
-					"stat_download": download,
-				}
-				servers.append(entry)
-			self.send_json(servers)
-		else:
-			self.send_error(404)
+# 	def do_GET(self):
+# 		path = self.path.split("/")
+# 		while "" in path:
+# 			path.remove("")
+# 		if (path == ["servers"]):
+# 			self.send_json(list(sc4mp_scanner.servers.values()))
+# 		elif (path == ["example-servers"]):
+# 			self.send_response(200)
+# 			servers = []
+# 			for i in range(100):
+# 				entry = {}
+# 				entry["host"] = "255.255.255.255"
+# 				entry["port"] = "7240"
+# 				entry["info"] = {
+# 					"server_name": "XXXXXXXXXXXXXXXXXXXXXX",
+# 					"password_enabled": random.choice([True, False])
+# 				}
+# 				mayors = random.randint(0, 10000)
+# 				online = random.randint(0, mayors)
+# 				claimed = random.uniform(0, 1)
+# 				download = random.randint(0, 10000000000)
+# 				entry["stats"] = {
+# 					"stat_mayors": mayors,
+# 					"stat_mayors_online": online,
+# 					"stat_claimed": claimed,
+# 					"stat_download": download,
+# 				}
+# 				servers.append(entry)
+# 			self.send_json(servers)
+# 		else:
+# 			self.send_error(404)
 
-	def send_json(self, data):
-		self.send_response(200)
-		self.send_header("Content-type", "application/json")
-		self.send_header("Access-Control-Allow-Origin", "*")
-		self.end_headers()
-		self.wfile.write(json.dumps(data, indent=4).encode())
+# 	def send_json(self, data):
+# 		self.send_response(200)
+# 		self.send_header("Content-type", "application/json")
+# 		self.send_header("Access-Control-Allow-Origin", "*")
+# 		self.end_headers()
+# 		self.wfile.write(json.dumps(data, indent=4).encode())
 
 
 class Logger():
-	
 	
 
 	def __init__(self):
