@@ -1,11 +1,11 @@
 import json
 import os
+import random
 import shutil
 import struct
 import sys
-import random
-import traceback
 import time
+import traceback
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -14,6 +14,12 @@ from os import unlink
 from pathlib import Path
 from socket import socket
 from threading import Thread, current_thread
+
+try:
+	from flask import Flask
+	sc4mp_has_flask = True
+except ImportError:
+	sc4mp_has_flask = False
 
 try:
 	import socks
@@ -54,7 +60,8 @@ def main():
 
 	print("Starting webserver...")
 
-	webserver = HTTPServer((args.host, int(args.port)), RequestHandler)
+	app = Flask(__name__)
+	#webserver = HTTPServer((args.host, int(args.port)), RequestHandler)
 	#webserver.socket = ssl.wrap_socket (webserver.socket, keyfile="key.pem", certfile='cert.pem', server_side=True)
 
 	print(f"Webserver started on http://localhost:{args.port}")
