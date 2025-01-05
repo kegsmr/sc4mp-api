@@ -16,7 +16,7 @@ from socket import socket
 from threading import Thread, current_thread
 
 try:
-	from flask import Flask, jsonify, abort
+	from flask import Flask, jsonify, abort, send_from_directory
 	app = Flask(__name__)
 	sc4mp_has_flask = True
 except ImportError:
@@ -138,6 +138,12 @@ def add_cors_headers(response):
 	response.headers['Access-Control-Allow-Origin'] = '*'
 
 	return response
+
+
+@app.route('/.well-known/acme-challenge/<filename>')
+def serve_challenge(filename):
+	
+    return send_from_directory(filename)
 
 
 @app.route("/servers", methods=["GET"])
