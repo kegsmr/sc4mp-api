@@ -15,6 +15,12 @@ from pathlib import Path
 from socket import socket
 from threading import Thread, current_thread
 
+try:
+	import socks
+	sc4mp_has_socks = True
+except ImportError:
+	sc4mp_has_socks = False
+
 from core.networking import send_json, recv_json
 
 
@@ -36,13 +42,12 @@ def main():
 
 	print("Starting scanner...")
 
-	global sc4mp_scanner, sc4mp_proxy, socks
+	global sc4mp_scanner, sc4mp_proxy
 
-	sc4mp_proxy = (args.proxy_host, int(args.proxy_port))
-	if None in sc4mp_proxy:
+	if None in [args.proxy_host, args.proxy_port]:
 		sc4mp_proxy = None
 	else:
-		import socks
+		sc4mp_proxy = (args.proxy_host, int(args.proxy_port))
 
 	sc4mp_scanner = Scanner()
 	sc4mp_scanner.start()
