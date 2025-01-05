@@ -132,6 +132,14 @@ def show_error(e):
 	print("[ERROR] " + message + "\n\n" + traceback.format_exc())
 
 
+@app.after_request
+def add_cors_headers(response):
+
+	response.headers['Access-Control-Allow-Origin'] = '*'
+
+	return response
+
+
 @app.route("/servers", methods=["GET"])
 def get_servers():
 
