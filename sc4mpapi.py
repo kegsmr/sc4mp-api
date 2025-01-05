@@ -174,7 +174,7 @@ class Scanner(Thread):
 									if "stats" not in self.new_servers[server_id].keys():
 										try:
 											self.new_servers[server_id]["stats"] = self.servers[server_id]["stats"]
-										except:
+										except Exception:
 											pass
 
 								self.servers = self.new_servers
@@ -726,7 +726,7 @@ class Logger():
 		
 		try:
 			unlink(self.log)
-		except:
+		except Exception:
 			pass
 
 
@@ -746,7 +746,7 @@ class Logger():
 				try:
 					label += "(" + item[0].f_locals["self"].__class__.__name__ + ") "
 					break
-				except:
+				except Exception:
 					pass
 			
 
