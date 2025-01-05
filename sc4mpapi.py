@@ -91,22 +91,6 @@ def get_bitmap_dimensions(filename):
 	return (width[0], height[0])
 
 
-"""def send_json(s, data):
-	
-	s.sendall(json.dumps(data).encode())"""
-
-
-"""def recv_json(s):
-	
-	data = ""
-	while True:
-		data += s.recv(SC4MP_BUFFER_SIZE).decode()
-		try:
-			return json.loads(data)
-		except json.decoder.JSONDecodeError:
-			pass"""
-
-
 def show_error(e):
 	
 	message = None
