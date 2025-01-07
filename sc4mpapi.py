@@ -628,7 +628,7 @@ class Scanner(Thread):
 
 						# Get necessary values from entry
 						filesize = entry[1]
-						relpath = Path(entry[2])
+						relpath = Path(entry[2].replace("\\", "/") if os.name != 'nt' else entry[2].replace("/", "\\")) #HACK
 
 						# Set the destination
 						d = Path(destination) / relpath
