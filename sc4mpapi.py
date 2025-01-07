@@ -228,10 +228,10 @@ class Scanner(Thread):
 							
 							else:
 
-								try:
-									shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList"))
-								except Exception as e:
-									pass
+								#try:
+								#	shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList"))
+								#except Exception as e:
+								#	pass
 
 								for server_id in self.new_servers.keys():
 									if "stats" not in self.new_servers[server_id].keys():
@@ -628,7 +628,7 @@ class Scanner(Thread):
 
 						# Get necessary values from entry
 						filesize = entry[1]
-						relpath = Path(entry[2].replace("\\", "/") if os.name != 'nt' else entry[2].replace("/", "\\")) #HACK
+						relpath = Path(entry[2])
 
 						# Set the destination
 						d = Path(destination) / relpath
