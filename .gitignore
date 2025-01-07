@@ -1,4 +1,6 @@
 _SC4MP
+deploy.bat
+exclude.txt
 *__pycache__
 *.bat
 *.log
