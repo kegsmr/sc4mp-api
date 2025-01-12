@@ -38,9 +38,9 @@ SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 SC4MP_BUFFER_SIZE = 4096
 
 
-def main():
+def init():
 
-	args = parse_args()
+	global sc4mp_scanner
 
 	sys.stdout = Logger()
 	current_thread().name = "Main"
@@ -49,24 +49,29 @@ def main():
 
 	print("Starting scanner...")
 
-	global sc4mp_scanner, sc4mp_proxy
-
-	if None in [args.proxy_host, args.proxy_port]:
-		sc4mp_proxy = None
-	else:
-		sc4mp_proxy = (args.proxy_host, int(args.proxy_port))
-
 	sc4mp_scanner = Scanner()
 	sc4mp_scanner.start()
+
+
+def main():
+
+	global sc4mp_args #, sc4mp_proxy
+
+	sc4mp_args = parse_args()
+
+	# if None in [sc4mp_args.proxy_host, sc4mp_args.proxy_port]:
+	# 	sc4mp_proxy = None
+	# else:
+	# 	sc4mp_proxy = (sc4mp_args.proxy_host, int(sc4mp_args.proxy_port))
 
 	print("Starting webserver...")
 
 	if sc4mp_has_flask:
 
-		print(f"Webserver started on http://localhost:{args.port}")
+		print(f"Webserver started on http://localhost:{sc4mp_args.port}")
 
 		try:
-			app.run(host=args.host, port=int(args.port), debug=False)
+			app.run(host=sc4mp_args.host, port=int(sc4mp_args.port), debug=False)
 		except KeyboardInterrupt:
 			pass
 
@@ -82,17 +87,6 @@ def main():
 		except KeyboardInterrupt:
 			pass
 
-	# webserver = HTTPServer((args.host, int(args.port)), RequestHandler)
-
-	# print(f"Webserver started on http://localhost:{args.port}")
-
-	# try:
-	# 	webserver.serve_forever()
-	# except KeyboardInterrupt:
-	# 	pass
-
-	# webserver.server_close()
-
 	print("Stopping scanner...")
 
 	sc4mp_scanner.end = True
@@ -102,10 +96,10 @@ def parse_args():
 
 	parser = ArgumentParser()
 
-	parser.add_argument("host")
-	parser.add_argument("port")
-	parser.add_argument("-r", "--proxy-host",  required=False)
-	parser.add_argument("-o", "--proxy-port", required=False)
+	parser.add_argument("--host", required=False)
+	parser.add_argument("--port", required=False)
+	parser.add_argument("--proxy-host",  required=False)
+	parser.add_argument("--proxy-port", required=False)
 	
 	return parser.parse_args()
 
@@ -171,6 +165,7 @@ class Scanner(Thread):
 	def __init__(self):
 
 		super().__init__()
+		self.daemon = True
 
 		self.MAX_THREADS = 50
 
@@ -321,14 +316,14 @@ class Scanner(Thread):
 
 		def socket(self, use_proxy=True):
 
-			if not use_proxy or sc4mp_proxy is None:
-				s = socket()
-			else:
-				try:
-					s = socks.socksocket()
-					s.set_proxy(socks.SOCKS5, sc4mp_proxy[0], sc4mp_proxy[1])
-				except (socks.SOCKS5Error, socks.GeneralProxyError):
-					return self.socket(use_proxy=False)
+			# if not use_proxy or sc4mp_proxy is None:
+			s = socket()
+			# else:
+			# 	try:
+			# 		s = socks.socksocket()
+			# 		s.set_proxy(socks.SOCKS5, sc4mp_proxy[0], sc4mp_proxy[1])
+			# 	except (socks.SOCKS5Error, socks.GeneralProxyError):
+			# 		return self.socket(use_proxy=False)
 
 			s.settimeout(30)
 
@@ -847,6 +842,8 @@ class Logger():
 		
 		self.terminal.flush()
 
+
+init()
 
 if __name__ == "__main__":        
     main()
