@@ -66,7 +66,7 @@ def main():
 		print(f"Webserver started on http://localhost:{args.port}")
 
 		try:
-			app.run(host=args.host, port=int(args.port))
+			app.run(host=args.host, port=int(args.port), debug=False)
 		except KeyboardInterrupt:
 			pass
 
