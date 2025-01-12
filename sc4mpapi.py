@@ -236,7 +236,7 @@ class Scanner(Thread):
 											pass
 
 								self.servers = self.new_servers
-								self.new_servers = dict()
+								self.new_servers = self.servers.copy() #dict()
 								self.server_queue = SC4MP_SERVERS.copy()
 								tried_servers = []
 
