@@ -228,6 +228,9 @@ class Scanner(Thread):
 								#except Exception as e:
 								#	pass
 
+								for server_id, entry in self.servers.items():
+									self.new_servers.setdefault(server_id, entry)
+
 								for server_id in self.new_servers.keys():
 									if "stats" not in self.new_servers[server_id].keys():
 										try:
@@ -236,7 +239,7 @@ class Scanner(Thread):
 											pass
 
 								self.servers = self.new_servers
-								self.new_servers = self.servers.copy() #dict()
+								self.new_servers = dict()
 								self.server_queue = SC4MP_SERVERS.copy()
 								tried_servers = []
 
