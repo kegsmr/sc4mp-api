@@ -363,6 +363,69 @@ class Scanner(Thread):
 			return s.recv(SC4MP_BUFFER_SIZE).decode()
 
 
+		# ===== SHARED HELPER METHODS =====
+
+		def _load_json(self, filename):
+			"""Returns data from a json file as a dictionary."""
+			try:
+				with open(filename, 'r') as file:
+					data = json.load(file)
+					if data is None:
+						return dict()
+					else:
+						return data
+			except FileNotFoundError:
+				return dict()
+
+
+		def _calculate_region_stats(self, server_id, server_time):
+			"""Calculate region statistics from downloaded region data."""
+			regions_path = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, "Regions")
+
+			mayors = set()
+			mayors_online = set()
+			claimed_area = 0
+			total_area = 0
+
+			for region in os.listdir(regions_path):
+				try:
+					region_path = os.path.join(regions_path, region)
+					region_config_path = os.path.join(region_path, "config.bmp")
+					region_dimensions = get_bitmap_dimensions(region_config_path)
+					region_database_path = os.path.join(region_path, "_Database", "region.json")
+					region_database = self._load_json(region_database_path)
+
+					for coords in region_database.keys():
+						city_entry = region_database[coords]
+						if city_entry is not None:
+							owner = city_entry["owner"]
+							if owner is not None:
+								claimed_area += city_entry["size"] ** 2
+								mayors.add(owner)
+								modified = city_entry["modified"]
+								if modified is not None:
+									modified = datetime.strptime(modified, "%Y-%m-%d %H:%M:%S")
+									if modified > server_time - timedelta(minutes=60):
+										mayors_online.add(owner)
+					total_area += region_dimensions[0] * region_dimensions[1]
+				except Exception as e:
+					show_error(e)
+
+			stat_mayors = len(mayors)
+			stat_mayors_online = len(mayors_online)
+
+			try:
+				stat_claimed = float(claimed_area) / float(total_area)
+			except ZeroDivisionError:
+				stat_claimed = 1
+
+			return {
+				"stat_mayors": stat_mayors,
+				"stat_mayors_online": stat_mayors_online,
+				"stat_claimed": stat_claimed
+			}
+
+
 		# ===== V0.9 PROTOCOL METHODS =====
 
 		def fetch(self):
@@ -392,19 +455,6 @@ class Scanner(Thread):
 
 		def server_stats(self, server_id):
 			"""Calculate server stats using v0.9 protocol"""
-
-			def load_json(filename):
-				"""Returns data from a json file as a dictionary."""
-				try:
-					with open(filename, 'r') as file:
-						data = json.load(file)
-						if data == None:
-							return dict()
-						else:
-							return data
-				except FileNotFoundError:
-					return dict()
-
 
 			def fetch_temp():
 
@@ -470,58 +520,24 @@ class Scanner(Thread):
 
 					return datetime.now()
 
-			entry = dict()
+			# Download files
+			stat_download = fetch_temp()
 
-			download = fetch_temp()
-
-			regions_path = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, "Regions")
-
+			# Get server time
 			server_time = get_time()
 
-			mayors = []
-			mayors_online = []
-			claimed_area = 0
-			total_area = 0
-			for region in os.listdir(regions_path):
-				try:
-					region_path = os.path.join(regions_path, region)
-					region_config_path = os.path.join(region_path, "config.bmp")
-					region_dimensions = get_bitmap_dimensions(region_config_path)
-					region_database_path = os.path.join(region_path, "_Database", "region.json")
-					region_database = load_json(region_database_path)
-					for coords in region_database.keys():
-						city_entry = region_database[coords]
-						if city_entry != None:
-							owner = city_entry["owner"]
-							if (owner != None):
-								claimed_area += city_entry["size"] ** 2
-								if (owner not in mayors):
-									mayors.append(owner)
-								modified = city_entry["modified"]
-								if (modified != None):
-									modified = datetime.strptime(modified, "%Y-%m-%d %H:%M:%S")
-									if (modified > server_time - timedelta(minutes=60) and owner not in mayors_online):
-										mayors_online.append(owner)
-					total_area += region_dimensions[0] * region_dimensions[1]
-				except Exception as e:
-					show_error(e) #pass
+			# Calculate region statistics
+			region_stats = self._calculate_region_stats(server_id, server_time)
 
-			stat_mayors = len(mayors)
+			# Build entry
+			entry = {
+				"stat_mayors": region_stats["stat_mayors"],
+				"stat_mayors_online": region_stats["stat_mayors_online"],
+				"stat_claimed": region_stats["stat_claimed"],
+				"stat_download": stat_download
+			}
 
-			stat_mayors_online = len(mayors_online)
-
-			try:
-				stat_claimed = (float(claimed_area) / float(total_area))
-			except ZeroDivisionError:
-				stat_claimed = 1
-
-			stat_download = download
-
-			entry["stat_mayors"] = stat_mayors
-			entry["stat_mayors_online"] = stat_mayors_online
-			entry["stat_claimed"] = stat_claimed
-			entry["stat_download"] = stat_download
-
+			# Cleanup temp files
 			try:
 				shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
 			except Exception as e:
@@ -559,19 +575,6 @@ class Scanner(Thread):
 
 		def server_stats_0_8(self, server_id):
 			"""Calculate server stats using v0.8/v0.4 protocol"""
-
-			def load_json(filename):
-				"""Returns data from a json file as a dictionary."""
-				try:
-					with open(filename, 'r') as file:
-						data = json.load(file)
-						if data == None:
-							return dict()
-						else:
-							return data
-				except FileNotFoundError:
-					return dict()
-
 
 			def fetch_temp():
 
@@ -658,58 +661,24 @@ class Scanner(Thread):
 
 					return datetime.now()
 
-			entry = dict()
+			# Download files
+			stat_download = fetch_temp()
 
-			download = fetch_temp()
-
-			regions_path = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, "Regions")
-
+			# Get server time
 			server_time = get_time()
 
-			mayors = []
-			mayors_online = []
-			claimed_area = 0
-			total_area = 0
-			for region in os.listdir(regions_path):
-				try:
-					region_path = os.path.join(regions_path, region)
-					region_config_path = os.path.join(region_path, "config.bmp")
-					region_dimensions = get_bitmap_dimensions(region_config_path)
-					region_database_path = os.path.join(region_path, "_Database", "region.json")
-					region_database = load_json(region_database_path)
-					for coords in region_database.keys():
-						city_entry = region_database[coords]
-						if city_entry != None:
-							owner = city_entry["owner"]
-							if (owner != None):
-								claimed_area += city_entry["size"] ** 2
-								if (owner not in mayors):
-									mayors.append(owner)
-								modified = city_entry["modified"]
-								if (modified != None):
-									modified = datetime.strptime(modified, "%Y-%m-%d %H:%M:%S")
-									if (modified > server_time - timedelta(minutes=60) and owner not in mayors_online):
-										mayors_online.append(owner)
-					total_area += region_dimensions[0] * region_dimensions[1]
-				except Exception as e:
-					show_error(e) #pass
+			# Calculate region statistics
+			region_stats = self._calculate_region_stats(server_id, server_time)
 
-			stat_mayors = len(mayors)
+			# Build entry
+			entry = {
+				"stat_mayors": region_stats["stat_mayors"],
+				"stat_mayors_online": region_stats["stat_mayors_online"],
+				"stat_claimed": region_stats["stat_claimed"],
+				"stat_download": stat_download
+			}
 
-			stat_mayors_online = len(mayors_online)
-
-			try:
-				stat_claimed = (float(claimed_area) / float(total_area))
-			except ZeroDivisionError:
-				stat_claimed = 1
-
-			stat_download = download
-
-			entry["stat_mayors"] = stat_mayors
-			entry["stat_mayors_online"] = stat_mayors_online
-			entry["stat_claimed"] = stat_claimed
-			entry["stat_download"] = stat_download
-
+			# Cleanup temp files
 			try:
 				shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
 			except Exception as e:
