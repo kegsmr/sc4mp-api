@@ -28,14 +28,17 @@ try:
 except ImportError:
 	sc4mp_has_socks = False
 
-from core.networking import send_json, recv_json
+from core.networking import (
+	ClientSocket, NetworkException, ConnectionClosedException,
+	send_json, recv_json, BUFFER_SIZE
+)
 
 
 SC4MP_TITLE = "SC4MP API"
 
 SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 
-SC4MP_BUFFER_SIZE = 4096
+SC4MP_BUFFER_SIZE = BUFFER_SIZE
 
 
 def init():
@@ -100,7 +103,7 @@ def parse_args():
 	parser.add_argument("--port", required=False)
 	parser.add_argument("--proxy-host",  required=False)
 	parser.add_argument("--proxy-port", required=False)
-	
+
 	return parser.parse_args()
 
 
@@ -116,11 +119,11 @@ def get_bitmap_dimensions(filename):
 
 
 def show_error(e):
-	
+
 	message = None
 	if isinstance(e, str):
 		message = e
-	else: 
+	else:
 		message = str(e)
 
 	print("[ERROR] " + message + "\n\n" + traceback.format_exc())
@@ -138,7 +141,7 @@ def add_cors_headers(response):
 def serve_challenge(filename):
 
     challenge_directory = os.path.join(os.getcwd(), '.well-known', 'acme-challenge')
-	
+
     return send_from_directory(challenge_directory, filename)
 
 
@@ -152,10 +155,10 @@ def get_servers():
 def get_server(server_id):
 
     server = sc4mp_scanner.servers.get(server_id)
-    
+
     if server is None:
         abort(404)
-    
+
     return jsonify(server)
 
 
@@ -175,7 +178,7 @@ class Scanner(Thread):
 		self.thread_count = 0
 		self.end = False
 
-	
+
 	def run(self):
 
 		try:
@@ -202,7 +205,7 @@ class Scanner(Thread):
 								self.thread_count += 1
 
 								tried_servers.append(server)
-						
+
 						time.sleep(.1)
 
 					else:
@@ -220,7 +223,7 @@ class Scanner(Thread):
 								count += 1
 
 								time.sleep(10)
-							
+
 							else:
 
 								#try:
@@ -251,7 +254,7 @@ class Scanner(Thread):
 
 					show_error(e)
 
-					time.sleep(10)	
+					time.sleep(10)
 
 		except KeyboardInterrupt:
 
@@ -260,7 +263,7 @@ class Scanner(Thread):
 
 	class Fetcher(Thread):
 
-		
+
 		def __init__(self, parent, server):
 
 			super().__init__()
@@ -268,7 +271,7 @@ class Scanner(Thread):
 			self.parent = parent
 			self.server = server
 
-		
+
 		def run(self):
 
 			print(f"Fetching server at {self.server[0]}:{self.server[1]}...")
@@ -283,24 +286,35 @@ class Scanner(Thread):
 					entry["port"] = self.server[1]
 					entry["url"] = f"sc4mp://{entry['host']}:{entry['port']}"
 
-					server_id = self.get("server_id")
-					server_version = self.get("server_version")
+					# Try v0.9 protocol first
+					try:
+						server_id, server_version = self.fetch_v09()
+						entry["version"] = server_version
+						entry["updated"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-					entry["version"] = server_version
-					entry["updated"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+						self.parent.new_servers.setdefault(server_id, entry)
 
-					self.parent.new_servers.setdefault(server_id, entry)
-
-					if (server_version[:3] == "0.3"):
-						self.server_list_3()
-						entry["info"] = self.server_info_3()
+						self.server_list_v09()
+						entry["info"] = self.server_info_v09()
 						if not entry["info"]["private"]:
-							entry["stats"] = self.server_stats_3(server_id)
-					else:
-						self.server_list()
-						entry["info"] = self.server_info()
+							entry["stats"] = self.server_stats_v09(server_id)
+
+					except (NetworkException, ConnectionClosedException, Exception) as e:
+						# Fall back to v0.8/v0.4 protocol
+						print(f"[INFO] v0.9 protocol failed, trying v0.8: {e}")
+
+						server_id = self.get("server_id")
+						server_version = self.get("server_version")
+
+						entry["version"] = server_version
+						entry["updated"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+						self.parent.new_servers.setdefault(server_id, entry)
+
+						self.server_list_v08()
+						entry["info"] = self.server_info_v08()
 						if not entry["info"]["private"]:
-							entry["stats"] = self.server_stats(server_id)	
+							entry["stats"] = self.server_stats_v08(server_id)
 
 				except TimeoutError:
 
@@ -317,8 +331,13 @@ class Scanner(Thread):
 				pass
 
 
-		def socket(self, use_proxy=True):
+		def client_socket(self, timeout=30):
+			"""Create a ClientSocket for v0.9 protocol"""
+			return ClientSocket(address=self.server, timeout=timeout)
 
+
+		def socket_v08(self, use_proxy=True):
+			"""Create a regular socket for v0.8/v0.4 protocol"""
 			# if not use_proxy or sc4mp_proxy is None:
 			s = socket()
 			# else:
@@ -336,45 +355,43 @@ class Scanner(Thread):
 
 
 		def get(self, request):
-
-			s = self.socket()
+			"""Simple request/response for v0.8/v0.4 protocol"""
+			s = self.socket_v08()
 
 			s.send(request.encode())
 
 			return s.recv(SC4MP_BUFFER_SIZE).decode()
-		
 
-		def server_list_3(self):
-			s = self.socket()
-			s.send(b"server_list")
-			size = int(s.recv(SC4MP_BUFFER_SIZE).decode())
-			s.send(b"ok")
-			for count in range(size):
-				host = s.recv(SC4MP_BUFFER_SIZE).decode()
-				s.send(b"ok")
-				port = int(s.recv(SC4MP_BUFFER_SIZE).decode())
-				s.send(b"ok")
+
+		# ===== V0.9 PROTOCOL METHODS =====
+
+		def fetch_v09(self):
+			"""Fetch server ID and version using v0.9 protocol"""
+			s = self.client_socket()
+			info = s.info()
+			return info.get("server_id"), info.get("server_version")
+
+
+		def server_list_v09(self):
+			"""Fetch server list using v0.9 protocol"""
+			s = self.client_socket()
+
+			servers = s.server_list()
+
+			# Loop through server list and append them to the unfetched servers
+			for host, port in servers:
 				self.parent.server_queue.append((host, port))
-		
 
-		def server_info_3(self):
 
-			entry = dict()
-			
-			entry["server_id"] = self.get("server_id")
-			entry["server_name"] = self.get("server_name")
-			entry["server_description"] = self.get("server_description")
-			entry["server_url"] = self.get("server_url")
-			entry["server_version"] = self.get("server_version")
-			entry["private"] = self.get("private") == "yes"
-			entry["password_enabled"] = self.get("password_enabled") == "yes"
-			entry["user_plugins_enabled"] = self.get("user_plugins_enabled") == "yes"
-			
-			return entry
-		
+		def server_info_v09(self):
+			"""Fetch server info using v0.9 protocol"""
+			s = self.client_socket()
 
-		def server_stats_3(self, server_id):
+			return s.info()
 
+
+		def server_stats_v09(self, server_id):
+			"""Calculate server stats using v0.9 protocol"""
 
 			def load_json(filename):
 				"""Returns data from a json file as a dictionary."""
@@ -391,106 +408,75 @@ class Scanner(Thread):
 
 			def fetch_temp():
 
-
-				def receive_or_cached(s, rootpath):
-
-					# Receive hashcode and set cache filename
-					hash = s.recv(SC4MP_BUFFER_SIZE).decode()
-
-					# Separator
-					s.send(b"ok")
-
-					# Receive filesize
-					filesize = int(s.recv(SC4MP_BUFFER_SIZE).decode())
-
-					# Separator
-					s.send(b"ok")
-
-					# Receive relative path and set the destination
-					relpath = os.path.normpath(s.recv(SC4MP_BUFFER_SIZE).decode())
-					filename = os.path.split(relpath)[1]
-					destination = os.path.join(rootpath, relpath)
-
-					if not (filename == "region.json" or filename == "config.bmp"):
-
-						# Tell the server that the file is cached
-						s.send(b"cached")
-
-					else:
-
-						# Tell the server that the file is not cached
-						s.send(b"not cached")
-
-						# Create the destination directory if necessary
-						destination_directory = os.path.split(destination)[0]
-						if (not os.path.exists(destination_directory)):
-							os.makedirs(destination_directory)
-
-						# Delete the destination file if it exists
-						if (os.path.exists(destination)):
-							os.remove(destination)
-
-						# Receive the file
-						filesize_read = 0
-						destination_file = open(destination, "wb")
-						while (filesize_read < filesize):
-							bytes_read = s.recv(SC4MP_BUFFER_SIZE)
-							#if not bytes_read:    
-							#	break
-							destination_file.write(bytes_read)
-							filesize_read += len(bytes_read)
-						
-					# Return the file size
-					return filesize
-
-				if os.path.exists(os.path.join("_SC4MP", "_Temp", "ServerList", server_id)):
-					raise Exception()
-
-				REQUESTS = [b"plugins", b"regions"]
+				TARGETS = ["plugins", "regions"]
 				DIRECTORIES = ["Plugins", "Regions"]
 
-				size_downloaded = 0
+				total_size = 0
 
-				for request, directory in zip(REQUESTS, DIRECTORIES):
+				for target, directory in zip(TARGETS, DIRECTORIES):
 
 					# Set destination
 					destination = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, directory)
 
-					# Make destination directory if it does not exist
-					if not os.path.exists(destination):
-						os.makedirs(destination)
-
 					# Create the socket
-					s = self.socket()
-					#s = socket()
-					#s.settimeout(30)
-					#s.connect(self.server)
+					s = self.client_socket()
 
-					# Request the type of data
-					s.send(request)
+					# Request file table
+					file_table = s.file_table(target)
 
-					# Receive file count
-					file_count = int(s.recv(SC4MP_BUFFER_SIZE).decode())
+					# Get total download size
+					size = sum([entry[1] for entry in file_table])
 
-					# Separator
-					s.send(b"ok")
+					# Prune file table as necessary
+					ft = []
+					for entry in file_table:
+						filename = Path(entry[2]).name
+						if filename in ["region.json", "config.bmp"]:
+							ft.append(entry)
+					file_table = ft
 
-					# Receive file size
-					size = int(s.recv(SC4MP_BUFFER_SIZE).decode())
+					# Download files
+					for checksum, filesize, relpath, file_data in s.file_table_data(target, file_table):
 
-					# Receive files
-					for files_received in range(file_count):
-						s.send(b"ok")
-						size_downloaded += receive_or_cached(s, destination)
+						# Set the destination
+						d = Path(destination) / relpath
 
-				return size_downloaded
+						# Create the destination directory if necessary
+						d.parent.mkdir(parents=True, exist_ok=True)
 
+						# Delete the destination file if it exists
+						d.unlink(missing_ok=True)
+
+						# Receive the file
+						with d.open("wb") as dest:
+							for chunk in file_data:
+								dest.write(chunk)
+
+					total_size += size
+
+				return total_size
+
+
+			def get_time():
+
+				try:
+
+					s = self.client_socket()
+					return s.time()
+
+				except Exception as e:
+
+					show_error(e)
+
+					return datetime.now()
 
 			entry = dict()
 
 			download = fetch_temp()
 
 			regions_path = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, "Regions")
+
+			server_time = get_time()
 
 			mayors = []
 			mayors_online = []
@@ -514,22 +500,22 @@ class Scanner(Thread):
 								modified = city_entry["modified"]
 								if (modified != None):
 									modified = datetime.strptime(modified, "%Y-%m-%d %H:%M:%S")
-									if (modified > datetime.now() - timedelta(hours=26) and owner not in mayors_online):
+									if (modified > server_time - timedelta(minutes=60) and owner not in mayors_online):
 										mayors_online.append(owner)
 					total_area += region_dimensions[0] * region_dimensions[1]
 				except Exception as e:
 					show_error(e) #pass
 
-			stat_mayors = len(mayors) #(random.randint(0,1000))
-			
+			stat_mayors = len(mayors)
+
 			stat_mayors_online = len(mayors_online)
-			
+
 			try:
-				stat_claimed = (float(claimed_area) / float(total_area)) #(float(random.randint(0, 100)) / 100)
+				stat_claimed = (float(claimed_area) / float(total_area))
 			except ZeroDivisionError:
 				stat_claimed = 1
 
-			stat_download = download #(random.randint(0, 10 ** 11))
+			stat_download = download
 
 			entry["stat_mayors"] = stat_mayors
 			entry["stat_mayors_online"] = stat_mayors_online
@@ -539,38 +525,40 @@ class Scanner(Thread):
 			try:
 				shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
 			except Exception as e:
-				show_error(e)
+				pass
 
 			return entry
 
 
-		def server_list(self):
+		# ===== V0.8/V0.4 PROTOCOL METHODS =====
 
+		def server_list_v08(self):
+			"""Fetch server list using v0.8/v0.4 protocol"""
 			# Create socket
-			s = self.socket()
-			
+			s = self.socket_v08()
+
 			# Request server list
 			s.send(b"server_list")
-			
+
 			# Receive server list
 			servers = recv_json(s)
 
 			# Loop through server list and append them to the unfetched servers
 			for host, port in servers:
 				self.parent.server_queue.append((host, port))
-		
 
-		def server_info(self):
-			
-			s = self.socket()
-			
+
+		def server_info_v08(self):
+			"""Fetch server info using v0.8/v0.4 protocol"""
+			s = self.socket_v08()
+
 			s.send(b"info")
-			
+
 			return recv_json(s)
 
 
-		def server_stats(self, server_id):
-
+		def server_stats_v08(self, server_id):
+			"""Calculate server stats using v0.8/v0.4 protocol"""
 
 			def load_json(filename):
 				"""Returns data from a json file as a dictionary."""
@@ -586,7 +574,7 @@ class Scanner(Thread):
 
 
 			def fetch_temp():
-				
+
 
 				REQUESTS = ["plugins", "regions"]
 				DIRECTORIES = ["Plugins", "Regions"]
@@ -599,7 +587,7 @@ class Scanner(Thread):
 					destination = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, directory)
 
 					# Create the socket
-					s = self.socket()
+					s = self.socket_v08()
 
 					# Request the type of data
 					s.send(request.encode())
@@ -652,21 +640,18 @@ class Scanner(Thread):
 					total_size += size
 
 				return total_size
-				
 
-			def time():
-				
+
+			def get_time():
+
 
 				try:
 
-					s = self.socket()
-					#s = socket()
-					#s.settimeout(30)
-					#s.connect((self.server[0], self.server[1]))
+					s = self.socket_v08()
 					s.send(b"time")
 
 					return datetime.strptime(s.recv(SC4MP_BUFFER_SIZE).decode(), "%Y-%m-%d %H:%M:%S")
-				
+
 				except Exception as e:
 
 					show_error(e)
@@ -679,7 +664,7 @@ class Scanner(Thread):
 
 			regions_path = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, "Regions")
 
-			server_time = time()
+			server_time = get_time()
 
 			mayors = []
 			mayors_online = []
@@ -709,16 +694,16 @@ class Scanner(Thread):
 				except Exception as e:
 					show_error(e) #pass
 
-			stat_mayors = len(mayors) #(random.randint(0,1000))
-			
+			stat_mayors = len(mayors)
+
 			stat_mayors_online = len(mayors_online)
-			
+
 			try:
-				stat_claimed = (float(claimed_area) / float(total_area)) #(float(random.randint(0, 100)) / 100)
+				stat_claimed = (float(claimed_area) / float(total_area))
 			except ZeroDivisionError:
 				stat_claimed = 1
 
-			stat_download = download #(random.randint(0, 10 ** 11))
+			stat_download = download
 
 			entry["stat_mayors"] = stat_mayors
 			entry["stat_mayors_online"] = stat_mayors_online
@@ -733,57 +718,15 @@ class Scanner(Thread):
 			return entry
 
 
-# class RequestHandler(BaseHTTPRequestHandler):
-    
-# 	def do_GET(self):
-# 		path = self.path.split("/")
-# 		while "" in path:
-# 			path.remove("")
-# 		if (path == ["servers"]):
-# 			self.send_json(list(sc4mp_scanner.servers.values()))
-# 		elif (path == ["example-servers"]):
-# 			self.send_response(200)
-# 			servers = []
-# 			for i in range(100):
-# 				entry = {}
-# 				entry["host"] = "255.255.255.255"
-# 				entry["port"] = "7240"
-# 				entry["info"] = {
-# 					"server_name": "XXXXXXXXXXXXXXXXXXXXXX",
-# 					"password_enabled": random.choice([True, False])
-# 				}
-# 				mayors = random.randint(0, 10000)
-# 				online = random.randint(0, mayors)
-# 				claimed = random.uniform(0, 1)
-# 				download = random.randint(0, 10000000000)
-# 				entry["stats"] = {
-# 					"stat_mayors": mayors,
-# 					"stat_mayors_online": online,
-# 					"stat_claimed": claimed,
-# 					"stat_download": download,
-# 				}
-# 				servers.append(entry)
-# 			self.send_json(servers)
-# 		else:
-# 			self.send_error(404)
-
-# 	def send_json(self, data):
-# 		self.send_response(200)
-# 		self.send_header("Content-type", "application/json")
-# 		self.send_header("Access-Control-Allow-Origin", "*")
-# 		self.end_headers()
-# 		self.wfile.write(json.dumps(data, indent=4).encode())
-
-
 class Logger():
-	
+
 
 	def __init__(self):
-		
+
 
 		self.terminal = sys.stdout
 		self.log = "sc4mpapi.log"
-		
+
 		try:
 			unlink(self.log)
 		except Exception:
@@ -791,7 +734,7 @@ class Logger():
 
 
 	def write(self, message):
-		
+
 
 		output = message
 
@@ -808,7 +751,7 @@ class Logger():
 					break
 				except Exception:
 					pass
-			
+
 
 			# Type and color
 			type = "[INFO] "
@@ -830,7 +773,7 @@ class Logger():
 					break
 			if (current_thread().getName() == "Main" and type == "[INFO] "):
 				color = '\033[00m '
-			
+
 			# Assemble
 			output = color + timestamp + label + type + message
 
@@ -838,15 +781,15 @@ class Logger():
 		self.terminal.write(output)
 		with open(self.log, "a") as log:
 			log.write(output)
-			log.close()  
+			log.close()
 
 
 	def flush(self):
-		
+
 		self.terminal.flush()
 
 
 init()
 
-if __name__ == "__main__":        
+if __name__ == "__main__":
     main()
