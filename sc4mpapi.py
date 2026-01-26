@@ -288,16 +288,16 @@ class Scanner(Thread):
 
 					# Try v0.9 protocol first
 					try:
-						server_id, server_version = self.fetch_v09()
+						server_id, server_version = self.fetch()
 						entry["version"] = server_version
 						entry["updated"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
 						self.parent.new_servers.setdefault(server_id, entry)
 
-						self.server_list_v09()
-						entry["info"] = self.server_info_v09()
+						self.server_list()
+						entry["info"] = self.server_info()
 						if not entry["info"]["private"]:
-							entry["stats"] = self.server_stats_v09(server_id)
+							entry["stats"] = self.server_stats(server_id)
 
 					except (NetworkException, ConnectionClosedException, Exception) as e:
 						# Fall back to v0.8/v0.4 protocol
@@ -311,10 +311,10 @@ class Scanner(Thread):
 
 						self.parent.new_servers.setdefault(server_id, entry)
 
-						self.server_list_v08()
-						entry["info"] = self.server_info_v08()
+						self.server_list_0_8()
+						entry["info"] = self.server_info_0_8()
 						if not entry["info"]["private"]:
-							entry["stats"] = self.server_stats_v08(server_id)
+							entry["stats"] = self.server_stats_0_8(server_id)
 
 				except TimeoutError:
 
@@ -336,7 +336,7 @@ class Scanner(Thread):
 			return ClientSocket(address=self.server, timeout=timeout)
 
 
-		def socket_v08(self, use_proxy=True):
+		def socket_0_8(self, use_proxy=True):
 			"""Create a regular socket for v0.8/v0.4 protocol"""
 			# if not use_proxy or sc4mp_proxy is None:
 			s = socket()
@@ -356,7 +356,7 @@ class Scanner(Thread):
 
 		def get(self, request):
 			"""Simple request/response for v0.8/v0.4 protocol"""
-			s = self.socket_v08()
+			s = self.socket_0_8()
 
 			s.send(request.encode())
 
@@ -365,14 +365,14 @@ class Scanner(Thread):
 
 		# ===== V0.9 PROTOCOL METHODS =====
 
-		def fetch_v09(self):
+		def fetch(self):
 			"""Fetch server ID and version using v0.9 protocol"""
 			s = self.client_socket()
 			info = s.info()
 			return info.get("server_id"), info.get("server_version")
 
 
-		def server_list_v09(self):
+		def server_list(self):
 			"""Fetch server list using v0.9 protocol"""
 			s = self.client_socket()
 
@@ -383,14 +383,14 @@ class Scanner(Thread):
 				self.parent.server_queue.append((host, port))
 
 
-		def server_info_v09(self):
+		def server_info(self):
 			"""Fetch server info using v0.9 protocol"""
 			s = self.client_socket()
 
 			return s.info()
 
 
-		def server_stats_v09(self, server_id):
+		def server_stats(self, server_id):
 			"""Calculate server stats using v0.9 protocol"""
 
 			def load_json(filename):
@@ -530,12 +530,12 @@ class Scanner(Thread):
 			return entry
 
 
-		# ===== V0.8/V0.4 PROTOCOL METHODS =====
+		# ===== V0.8/V0.4 PROTOCOL METHODS (LEGACY) =====
 
-		def server_list_v08(self):
+		def server_list_0_8(self):
 			"""Fetch server list using v0.8/v0.4 protocol"""
 			# Create socket
-			s = self.socket_v08()
+			s = self.socket_0_8()
 
 			# Request server list
 			s.send(b"server_list")
@@ -548,16 +548,16 @@ class Scanner(Thread):
 				self.parent.server_queue.append((host, port))
 
 
-		def server_info_v08(self):
+		def server_info_0_8(self):
 			"""Fetch server info using v0.8/v0.4 protocol"""
-			s = self.socket_v08()
+			s = self.socket_0_8()
 
 			s.send(b"info")
 
 			return recv_json(s)
 
 
-		def server_stats_v08(self, server_id):
+		def server_stats_0_8(self, server_id):
 			"""Calculate server stats using v0.8/v0.4 protocol"""
 
 			def load_json(filename):
@@ -587,7 +587,7 @@ class Scanner(Thread):
 					destination = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, directory)
 
 					# Create the socket
-					s = self.socket_v08()
+					s = self.socket_0_8()
 
 					# Request the type of data
 					s.send(request.encode())
@@ -647,7 +647,7 @@ class Scanner(Thread):
 
 				try:
 
-					s = self.socket_v08()
+					s = self.socket_0_8()
 					s.send(b"time")
 
 					return datetime.strptime(s.recv(SC4MP_BUFFER_SIZE).decode(), "%Y-%m-%d %H:%M:%S")
