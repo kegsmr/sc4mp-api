@@ -4,6 +4,7 @@ import random
 import shutil
 import struct
 import sys
+import tempfile
 import time
 import traceback
 from argparse import ArgumentParser
@@ -378,9 +379,9 @@ class Scanner(Thread):
 				return dict()
 
 
-		def _calculate_region_stats(self, server_id, server_time):
+		def _calculate_region_stats(self, temp_dir, server_time):
 			"""Calculate region statistics from downloaded region data."""
-			regions_path = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, "Regions")
+			regions_path = os.path.join(temp_dir, "Regions")
 
 			mayors = set()
 			mayors_online = set()
@@ -458,6 +459,9 @@ class Scanner(Thread):
 
 			def fetch_temp():
 
+				# Create temporary directory
+				temp_dir = tempfile.mkdtemp(prefix="sc4mp_api_")
+
 				TARGETS = ["plugins", "regions"]
 				DIRECTORIES = ["Plugins", "Regions"]
 
@@ -466,7 +470,7 @@ class Scanner(Thread):
 				for target, directory in zip(TARGETS, DIRECTORIES):
 
 					# Set destination
-					destination = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, directory)
+					destination = os.path.join(temp_dir, directory)
 
 					# Create the socket
 					s = self.client_socket()
@@ -504,7 +508,7 @@ class Scanner(Thread):
 
 					total_size += size
 
-				return total_size
+				return total_size, temp_dir
 
 
 			def get_time():
@@ -521,13 +525,13 @@ class Scanner(Thread):
 					return datetime.now()
 
 			# Download files
-			stat_download = fetch_temp()
+			stat_download, temp_dir = fetch_temp()
 
 			# Get server time
 			server_time = get_time()
 
 			# Calculate region statistics
-			region_stats = self._calculate_region_stats(server_id, server_time)
+			region_stats = self._calculate_region_stats(temp_dir, server_time)
 
 			# Build entry
 			entry = {
@@ -539,7 +543,7 @@ class Scanner(Thread):
 
 			# Cleanup temp files
 			try:
-				shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
+				shutil.rmtree(temp_dir)
 			except Exception as e:
 				pass
 
@@ -578,6 +582,8 @@ class Scanner(Thread):
 
 			def fetch_temp():
 
+				# Create temporary directory
+				temp_dir = tempfile.mkdtemp(prefix="sc4mp_api_")
 
 				REQUESTS = ["plugins", "regions"]
 				DIRECTORIES = ["Plugins", "Regions"]
@@ -587,7 +593,7 @@ class Scanner(Thread):
 				for request, directory in zip(REQUESTS, DIRECTORIES):
 
 					# Set destination
-					destination = os.path.join("_SC4MP", "_Temp", "ServerList", server_id, directory)
+					destination = os.path.join(temp_dir, directory)
 
 					# Create the socket
 					s = self.socket_0_8()
@@ -642,7 +648,7 @@ class Scanner(Thread):
 
 					total_size += size
 
-				return total_size
+				return total_size, temp_dir
 
 
 			def get_time():
@@ -662,13 +668,13 @@ class Scanner(Thread):
 					return datetime.now()
 
 			# Download files
-			stat_download = fetch_temp()
+			stat_download, temp_dir = fetch_temp()
 
 			# Get server time
 			server_time = get_time()
 
 			# Calculate region statistics
-			region_stats = self._calculate_region_stats(server_id, server_time)
+			region_stats = self._calculate_region_stats(temp_dir, server_time)
 
 			# Build entry
 			entry = {
@@ -680,7 +686,7 @@ class Scanner(Thread):
 
 			# Cleanup temp files
 			try:
-				shutil.rmtree(os.path.join("_SC4MP", "_Temp", "ServerList", server_id))
+				shutil.rmtree(temp_dir)
 			except Exception as e:
 				pass
 
