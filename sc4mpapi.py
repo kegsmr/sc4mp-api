@@ -304,11 +304,11 @@ class Scanner(Thread):
 
 				except TimeoutError:
 
-					print("[WARNING] Server timed out.")
+					print(f"[WARNING] Server at {self.server[0]}:{self.server[1]} timed out.")
 
 				except Exception as e:
 
-					print(f"[WARNING] Failed to fetch server: {e}")
+					print(f"[WARNING] Failed to fetch server at {self.server[0]}:{self.server[1]}: {e}")
 
 				self.parent.thread_count -= 1
 
