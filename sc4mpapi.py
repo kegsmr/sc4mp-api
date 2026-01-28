@@ -392,8 +392,9 @@ class Scanner(Thread):
 									if modified > server_time - timedelta(minutes=60):
 										mayors_online.add(owner)
 					total_area += region_dimensions[0] * region_dimensions[1]
-				except Exception as e:
-					show_error(e)
+				except Exception:
+					# Skip directories that don't have the expected region structure
+					pass
 
 			stat_mayors = len(mayors)
 			stat_mayors_online = len(mayors_online)
