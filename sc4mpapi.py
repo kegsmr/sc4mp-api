@@ -286,35 +286,35 @@ class Scanner(Thread):
 					entry["port"] = self.server[1]
 					entry["url"] = f"sc4mp://{entry['host']}:{entry['port']}"
 
-					# Try v0.9 protocol first
+					# Determine which protocol to use
+					use_legacy = False
 					try:
 						server_id, server_version = self.fetch()
-						entry["version"] = server_version
-						entry["updated"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+					except (NetworkException, ConnectionClosedException) as e:
+						print(f"[INFO] Connection failed, falling back to legacy protocol: {e}")
+						use_legacy = True
 
-						self.parent.new_servers.setdefault(server_id, entry)
-
-						self.server_list()
-						entry["info"] = self.server_info()
-						if not entry["info"]["private"]:
-							entry["stats"] = self.server_stats(server_id)
-
-					except (NetworkException, ConnectionClosedException, Exception) as e:
-						# Fall back to v0.8/v0.4 protocol
-						print(f"[INFO] v0.9 protocol failed, trying v0.8: {e}")
-
+					# Use legacy protocol if needed
+					if use_legacy:
 						server_id = self.get("server_id")
 						server_version = self.get("server_version")
 
-						entry["version"] = server_version
-						entry["updated"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+					entry["version"] = server_version
+					entry["updated"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-						self.parent.new_servers.setdefault(server_id, entry)
+					self.parent.new_servers.setdefault(server_id, entry)
 
+					# Fetch server data using appropriate protocol
+					if use_legacy:
 						self.server_list_0_8()
 						entry["info"] = self.server_info_0_8()
 						if not entry["info"]["private"]:
 							entry["stats"] = self.server_stats_0_8(server_id)
+					else:
+						self.server_list()
+						entry["info"] = self.server_info()
+						if not entry["info"]["private"]:
+							entry["stats"] = self.server_stats(server_id)
 
 				except TimeoutError:
 
@@ -332,7 +332,7 @@ class Scanner(Thread):
 
 
 		def client_socket(self, timeout=30):
-			"""Create a ClientSocket for v0.9 protocol"""
+			"""Create a ClientSocket instance"""
 			return ClientSocket(address=self.server, timeout=timeout)
 
 
@@ -434,17 +434,17 @@ class Scanner(Thread):
 			}
 
 
-		# ===== V0.9 PROTOCOL METHODS =====
+		# ===== PROTOCOL METHODS =====
 
 		def fetch(self):
-			"""Fetch server ID and version using v0.9 protocol"""
+			"""Fetch server ID and version"""
 			s = self.client_socket()
 			info = s.info()
 			return info.get("server_id"), info.get("server_version")
 
 
 		def server_list(self):
-			"""Fetch server list using v0.9 protocol"""
+			"""Fetch server list"""
 			s = self.client_socket()
 
 			servers = s.server_list()
@@ -455,14 +455,14 @@ class Scanner(Thread):
 
 
 		def server_info(self):
-			"""Fetch server info using v0.9 protocol"""
+			"""Fetch server info"""
 			s = self.client_socket()
 
 			return s.info()
 
 
 		def server_stats(self, server_id):
-			"""Calculate server stats using v0.9 protocol"""
+			"""Calculate server stats"""
 
 			def fetch_temp():
 
