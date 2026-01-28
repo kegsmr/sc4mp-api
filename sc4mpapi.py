@@ -29,10 +29,9 @@ try:
 except ImportError:
 	sc4mp_has_socks = False
 
-from core.networking import (
-	ClientSocket, NetworkException, ConnectionClosedException,
+from core.networking import \
+	ClientSocket, NetworkException, ConnectionClosedException, \
 	send_json, recv_json, BUFFER_SIZE
-)
 
 
 SC4MP_TITLE = "SC4MP API"
