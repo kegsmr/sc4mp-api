@@ -382,6 +382,14 @@ class Scanner(Thread):
 			"""Calculate region statistics from downloaded region data."""
 			regions_path = os.path.join(temp_dir, "Regions")
 
+			# Check if Regions directory exists (may not if no files were downloaded)
+			if not os.path.exists(regions_path):
+				return {
+					"stat_mayors": 0,
+					"stat_mayors_online": 0,
+					"stat_claimed": 0
+				}
+
 			mayors = set()
 			mayors_online = set()
 			claimed_area = 0
