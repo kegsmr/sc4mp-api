@@ -23,12 +23,6 @@ try:
 except ImportError:
 	sc4mp_has_flask = False
 
-try:
-	import socks
-	sc4mp_has_socks = True
-except ImportError:
-	sc4mp_has_socks = False
-
 from core.networking import \
 	ClientSocket, NetworkException, ConnectionClosedException, \
 	send_json, recv_json, BUFFER_SIZE
@@ -58,14 +52,9 @@ def init():
 
 def main():
 
-	global sc4mp_args #, sc4mp_proxy
+	global sc4mp_args
 
 	sc4mp_args = parse_args()
-
-	# if None in [sc4mp_args.proxy_host, sc4mp_args.proxy_port]:
-	# 	sc4mp_proxy = None
-	# else:
-	# 	sc4mp_proxy = (sc4mp_args.proxy_host, int(sc4mp_args.proxy_port))
 
 	print("Starting webserver...")
 
@@ -101,8 +90,6 @@ def parse_args():
 
 	parser.add_argument("--host", required=False)
 	parser.add_argument("--port", required=False)
-	parser.add_argument("--proxy-host",  required=False)
-	parser.add_argument("--proxy-port", required=False)
 
 	return parser.parse_args()
 
@@ -336,21 +323,11 @@ class Scanner(Thread):
 			return ClientSocket(address=self.server, timeout=timeout)
 
 
-		def socket_0_8(self, use_proxy=True):
+		def socket_0_8(self):
 			"""Create a regular socket for v0.8/v0.4 protocol"""
-			# if not use_proxy or sc4mp_proxy is None:
 			s = socket()
-			# else:
-			# 	try:
-			# 		s = socks.socksocket()
-			# 		s.set_proxy(socks.SOCKS5, sc4mp_proxy[0], sc4mp_proxy[1])
-			# 	except (socks.SOCKS5Error, socks.GeneralProxyError):
-			# 		return self.socket(use_proxy=False)
-
 			s.settimeout(30)
-
 			s.connect(self.server)
-
 			return s
 
 
