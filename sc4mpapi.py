@@ -277,8 +277,7 @@ class Scanner(Thread):
 					use_legacy = False
 					try:
 						server_id, server_version = self.fetch()
-					except (NetworkException, ConnectionClosedException) as e:
-						print(f"[INFO] Connection failed, falling back to legacy protocol: {e}")
+					except (NetworkException, ConnectionClosedException):
 						use_legacy = True
 
 					# Use legacy protocol if needed
@@ -309,7 +308,7 @@ class Scanner(Thread):
 
 				except Exception as e:
 
-					show_error(e)
+					print(f"[WARNING] Failed to fetch server: {e}")
 
 				self.parent.thread_count -= 1
 
