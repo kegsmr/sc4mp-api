@@ -27,6 +27,8 @@ from core.networking import \
 	ClientSocket, NetworkException, ConnectionClosedException, \
 	send_json, recv_json, BUFFER_SIZE
 
+from core.dbpf import SC4Savegame
+
 
 SC4MP_TITLE = "SC4MP API"
 
@@ -34,6 +36,9 @@ SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 
 SC4MP_BUFFER_SIZE = BUFFER_SIZE
 
+SC4MP_DATABASE_DIR = os.path.join("_SC4MP", "_Database")
+SC4MP_SERVERS_DIR = os.path.join(SC4MP_DATABASE_DIR, "servers")
+SC4MP_CITIES_DIR = os.path.join(SC4MP_DATABASE_DIR, "cities")
 
 def init():
 
@@ -43,6 +48,11 @@ def init():
 	current_thread().name = "Main"
 
 	print(SC4MP_TITLE)
+
+	# Create database directory structure
+	os.makedirs(SC4MP_SERVERS_DIR, exist_ok=True)
+	os.makedirs(SC4MP_CITIES_DIR, exist_ok=True)
+	print(f"Database directory initialized at {SC4MP_DATABASE_DIR}")
 
 	print("Starting scanner...")
 
@@ -147,6 +157,42 @@ def get_server(server_id):
         abort(404)
 
     return jsonify(server)
+
+
+@app.route("/cities", methods=["GET"])
+def get_cities():
+
+	# Load all city JSON files from cache
+	cities = {}
+
+	if os.path.exists(SC4MP_CITIES_DIR):
+		for filename in os.listdir(SC4MP_CITIES_DIR):
+			if filename.endswith('.json'):
+				file_md5 = filename[:-5]  # Remove .json extension
+				filepath = os.path.join(SC4MP_CITIES_DIR, filename)
+				try:
+					with open(filepath, 'r') as f:
+						cities[file_md5] = json.load(f)
+				except Exception:
+					pass
+
+	return jsonify(list(cities.values()))
+
+
+@app.route("/cities/<file_md5>", methods=["GET"])
+def get_city(file_md5):
+
+	# Try loading from disk
+	filepath = os.path.join(SC4MP_CITIES_DIR, f"{file_md5}.json")
+	if os.path.exists(filepath):
+		try:
+			with open(filepath, 'r') as f:
+				city = json.load(f)
+				return jsonify(city)
+		except Exception:
+			pass
+
+	abort(404)
 
 
 class Scanner(Thread):
@@ -354,7 +400,74 @@ class Scanner(Thread):
 				return dict()
 
 
-		def _calculate_region_stats(self, temp_dir, server_time):
+		def _load_city_from_cache(self, file_md5):
+			"""Load city stats from cache if available."""
+			cache_path = os.path.join(SC4MP_CITIES_DIR, f"{file_md5}.json")
+			if os.path.exists(cache_path):
+				try:
+					with open(cache_path, 'r') as f:
+						return json.load(f)
+				except Exception as e:
+					print(f"[WARNING] Failed to load city cache {file_md5}: {e}")
+			return None
+
+
+		def _save_city_to_cache(self, file_md5, city_data):
+			"""Save city stats to cache."""
+			cache_path = os.path.join(SC4MP_CITIES_DIR, f"{file_md5}.json")
+			try:
+				with open(cache_path, 'w') as f:
+					json.dump(city_data, f, indent=2)
+			except Exception as e:
+				print(f"[WARNING] Failed to save city cache {file_md5}: {e}")
+
+
+		def _parse_city_file(self, filepath, file_md5):
+			"""Parse a .sc4 savegame file and return city stats."""
+			# Check cache first
+			cached = self._load_city_from_cache(file_md5)
+			if cached is not None:
+				return cached
+
+			# Parse the savegame file
+			try:
+				savegame = SC4Savegame(filepath, error_callback=lambda e: None)
+
+				# Get city data
+				city_data = savegame.get_SC4ReadRegionalCity()
+				budget_data = savegame.get_cSC4BudgetSimulator()
+
+				savegame.close()
+
+				# Build city stats object
+				stats = {
+					"file_md5": file_md5,
+					"cityName": city_data.get("cityName"),
+					"mayorName": city_data.get("mayorName"),
+					"tileXLocation": city_data.get("tileXLocation"),
+					"tileYLocation": city_data.get("tileYLocation"),
+					"citySizeX": city_data.get("citySizeX"),
+					"citySizeY": city_data.get("citySizeY"),
+					"residentialPopulation": city_data.get("residentialPopulation"),
+					"commercialPopulation": city_data.get("commercialPopulation"),
+					"industrialPopulation": city_data.get("industrialPopulation"),
+					"mayorRating": city_data.get("mayorRating"),
+					"starCount": city_data.get("starCount"),
+					"totalFunds": budget_data.get("totalFunds"),
+					"tutorialFlag": city_data.get("tutorialFlag"),
+					"modeFlag": city_data.get("modeFlag")
+				}
+
+				# Save to cache
+				self._save_city_to_cache(file_md5, stats)
+
+				return stats
+			except Exception as e:
+				print(f"[WARNING] Failed to parse city file {filepath}: {e}")
+				return None
+
+
+		def _calculate_region_stats(self, temp_dir, server_time, file_table):
 			"""Calculate region statistics from downloaded region data."""
 			regions_path = os.path.join(temp_dir, "Regions")
 
@@ -363,13 +476,20 @@ class Scanner(Thread):
 				return {
 					"stat_mayors": 0,
 					"stat_mayors_online": 0,
-					"stat_claimed": 0
+					"stat_claimed": 0,
+					"regions": {}
 				}
 
 			mayors = set()
 			mayors_online = set()
 			claimed_area = 0
 			total_area = 0
+			regions = {}
+
+			# Build MD5 lookup from file_table
+			md5_lookup = {}
+			for checksum, filesize, relpath in file_table:
+				md5_lookup[str(Path(relpath))] = checksum
 
 			for region in os.listdir(regions_path):
 				try:
@@ -378,6 +498,9 @@ class Scanner(Thread):
 					region_dimensions = get_bitmap_dimensions(region_config_path)
 					region_database_path = os.path.join(region_path, "_Database", "region.json")
 					region_database = self._load_json(region_database_path)
+
+					# Initialize regions dict entry
+					regions[region] = {}
 
 					for coords in region_database.keys():
 						city_entry = region_database[coords]
@@ -391,9 +514,27 @@ class Scanner(Thread):
 									modified = datetime.strptime(modified, "%Y-%m-%d %H:%M:%S")
 									if modified > server_time - timedelta(minutes=60):
 										mayors_online.add(owner)
+
+							# Parse city savegame if it exists
+							city_filename = f"{coords}.sc4"
+							city_path = os.path.join(region_path, city_filename)
+							if os.path.exists(city_path):
+								# Get MD5 from file_table
+								relative_path = os.path.join(region, city_filename)
+								file_md5 = md5_lookup.get(relative_path)
+
+								if file_md5:
+									# Parse city file
+									city_stats = self._parse_city_file(city_path, file_md5)
+									if city_stats:
+										# Store in regions dict
+										city_name = city_stats.get("cityName", coords)
+										regions[region][city_name] = file_md5
+
 					total_area += region_dimensions[0] * region_dimensions[1]
-				except Exception:
+				except Exception as e:
 					# Skip directories that don't have the expected region structure
+					print(f"[WARNING] Failed to process region {region}: {e}")
 					pass
 
 			stat_mayors = len(mayors)
@@ -407,7 +548,8 @@ class Scanner(Thread):
 			return {
 				"stat_mayors": stat_mayors,
 				"stat_mayors_online": stat_mayors_online,
-				"stat_claimed": stat_claimed
+				"stat_claimed": stat_claimed,
+				"regions": regions
 			}
 
 
@@ -450,6 +592,7 @@ class Scanner(Thread):
 				DIRECTORIES = ["Plugins", "Regions"]
 
 				total_size = 0
+				regions_file_table = []
 
 				for target, directory in zip(TARGETS, DIRECTORIES):
 
@@ -469,9 +612,13 @@ class Scanner(Thread):
 					ft = []
 					for entry in file_table:
 						filename = Path(entry[2]).name
-						if filename in ["region.json", "config.bmp"]:
+						if filename in ["region.json", "config.bmp"] or filename.endswith(".sc4"):
 							ft.append(entry)
 					file_table = ft
+
+					# Save regions file table for city parsing
+					if target == "regions":
+						regions_file_table = file_table
 
 					# Download files
 					for checksum, filesize, relpath, file_data in s.file_table_data(target, file_table):
@@ -492,7 +639,7 @@ class Scanner(Thread):
 
 					total_size += size
 
-				return total_size, temp_dir
+				return total_size, temp_dir, regions_file_table
 
 
 			def get_time():
@@ -509,20 +656,21 @@ class Scanner(Thread):
 					return datetime.now()
 
 			# Download files
-			stat_download, temp_dir = fetch_temp()
+			stat_download, temp_dir, regions_file_table = fetch_temp()
 
 			# Get server time
 			server_time = get_time()
 
 			# Calculate region statistics
-			region_stats = self._calculate_region_stats(temp_dir, server_time)
+			region_stats = self._calculate_region_stats(temp_dir, server_time, regions_file_table)
 
 			# Build entry
 			entry = {
 				"stat_mayors": region_stats["stat_mayors"],
 				"stat_mayors_online": region_stats["stat_mayors_online"],
 				"stat_claimed": region_stats["stat_claimed"],
-				"stat_download": stat_download
+				"stat_download": stat_download,
+				"regions": region_stats["regions"]
 			}
 
 			# Cleanup temp files
@@ -573,6 +721,7 @@ class Scanner(Thread):
 				DIRECTORIES = ["Plugins", "Regions"]
 
 				total_size = 0
+				regions_file_table = []
 
 				for request, directory in zip(REQUESTS, DIRECTORIES):
 
@@ -595,9 +744,13 @@ class Scanner(Thread):
 					ft = []
 					for entry in file_table:
 						filename = Path(entry[2]).name
-						if filename in ["region.json", "config.bmp"]:
+						if filename in ["region.json", "config.bmp"] or filename.endswith(".sc4"):
 							ft.append(entry)
 					file_table = ft
+
+					# Save regions file table for city parsing
+					if request == "regions":
+						regions_file_table = file_table
 
 					# Send pruned file table
 					send_json(s, file_table)
@@ -632,7 +785,7 @@ class Scanner(Thread):
 
 					total_size += size
 
-				return total_size, temp_dir
+				return total_size, temp_dir, regions_file_table
 
 
 			def get_time():
@@ -652,20 +805,21 @@ class Scanner(Thread):
 					return datetime.now()
 
 			# Download files
-			stat_download, temp_dir = fetch_temp()
+			stat_download, temp_dir, regions_file_table = fetch_temp()
 
 			# Get server time
 			server_time = get_time()
 
 			# Calculate region statistics
-			region_stats = self._calculate_region_stats(temp_dir, server_time)
+			region_stats = self._calculate_region_stats(temp_dir, server_time, regions_file_table)
 
 			# Build entry
 			entry = {
 				"stat_mayors": region_stats["stat_mayors"],
 				"stat_mayors_online": region_stats["stat_mayors_online"],
 				"stat_claimed": region_stats["stat_claimed"],
-				"stat_download": stat_download
+				"stat_download": stat_download,
+				"regions": region_stats["regions"]
 			}
 
 			# Cleanup temp files
