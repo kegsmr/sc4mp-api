@@ -288,6 +288,11 @@ class Scanner(Thread):
 					entry["version"] = server_version
 					entry["updated"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
+					# Only add server if we got a valid server_id
+					if not server_id:
+						print(f"[WARNING] Server at {self.server[0]}:{self.server[1]} failed to get server ID, skipping.")
+						return
+
 					self.parent.new_servers.setdefault(server_id, entry)
 
 					# Fetch server data using appropriate protocol
