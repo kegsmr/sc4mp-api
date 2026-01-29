@@ -494,6 +494,9 @@ class Scanner(Thread):
 			for region in os.listdir(regions_path):
 				try:
 					region_path = os.path.join(regions_path, region)
+					# Skip files (like .sc4), only process directories
+					if not os.path.isdir(region_path):
+						continue
 					region_config_path = os.path.join(region_path, "config.bmp")
 					region_dimensions = get_bitmap_dimensions(region_config_path)
 					region_database_path = os.path.join(region_path, "_Database", "region.json")
