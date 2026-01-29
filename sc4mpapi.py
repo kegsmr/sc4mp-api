@@ -34,6 +34,9 @@ SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 
 SC4MP_BUFFER_SIZE = BUFFER_SIZE
 
+SC4MP_DATABASE_DIR = os.path.join("_SC4MP", "_Database")
+SC4MP_SERVERS_DIR = os.path.join(SC4MP_DATABASE_DIR, "servers")
+
 
 def init():
 
@@ -43,6 +46,10 @@ def init():
 	current_thread().name = "Main"
 
 	print(SC4MP_TITLE)
+
+	# Create database directory structure
+	os.makedirs(SC4MP_SERVERS_DIR, exist_ok=True)
+	print(f"Database directory initialized at {SC4MP_DATABASE_DIR}")
 
 	print("Starting scanner...")
 
@@ -94,6 +101,16 @@ def parse_args():
 	return parser.parse_args()
 
 
+def sanitize_filename(name):
+	"""Sanitize a string to be safe for use as a filename."""
+	# Replace unsafe characters with underscores
+	unsafe_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+	sanitized = name
+	for char in unsafe_chars:
+		sanitized = sanitized.replace(char, '_')
+	return sanitized
+
+
 def get_bitmap_dimensions(filename):
 
 	with open(filename, "rb") as file:
@@ -143,6 +160,17 @@ def get_server(server_id):
 
     server = sc4mp_scanner.servers.get(server_id)
 
+    # Fallback: try loading from disk if not in memory
+    if server is None:
+        safe_id = sanitize_filename(server_id)
+        filepath = os.path.join(SC4MP_SERVERS_DIR, f"{safe_id}.json")
+        if os.path.exists(filepath):
+            try:
+                with open(filepath, 'r') as f:
+                    server = json.load(f)
+            except Exception:
+                pass
+
     if server is None:
         abort(404)
 
@@ -160,10 +188,43 @@ class Scanner(Thread):
 		self.MAX_THREADS = 50
 
 		self.new_servers = dict()
-		self.servers = self.new_servers
+		self.servers = self._load_servers_from_disk()
 		self.server_queue = SC4MP_SERVERS.copy()
 		self.thread_count = 0
 		self.end = False
+
+
+	def _load_servers_from_disk(self):
+		"""Load all server JSON files from disk on startup."""
+		servers = dict()
+
+		if not os.path.exists(SC4MP_SERVERS_DIR):
+			return servers
+
+		for filename in os.listdir(SC4MP_SERVERS_DIR):
+			if filename.endswith('.json'):
+				server_id = filename[:-5]  # Remove .json extension
+				filepath = os.path.join(SC4MP_SERVERS_DIR, filename)
+				try:
+					with open(filepath, 'r') as f:
+						servers[server_id] = json.load(f)
+					print(f"Loaded server {server_id} from disk")
+				except Exception as e:
+					print(f"[WARNING] Failed to load server from {filepath}: {e}")
+
+		print(f"Loaded {len(servers)} servers from disk")
+		return servers
+
+
+	def _save_server_to_disk(self, server_id, server_data):
+		"""Save a single server's data to a JSON file."""
+		safe_id = sanitize_filename(server_id)
+		filepath = os.path.join(SC4MP_SERVERS_DIR, f"{safe_id}.json")
+		try:
+			with open(filepath, 'w') as f:
+				json.dump(server_data, f, indent=2)
+		except Exception as e:
+			print(f"[WARNING] Failed to save server {server_id} to disk: {e}")
 
 
 	def run(self):
@@ -228,7 +289,13 @@ class Scanner(Thread):
 										except Exception:
 											pass
 
+								# Update servers dictionary
 								self.servers = self.new_servers
+
+								# Save all servers to disk
+								for server_id, server_data in self.servers.items():
+									self._save_server_to_disk(server_id, server_data)
+
 								self.new_servers = dict()
 								self.server_queue = SC4MP_SERVERS.copy()
 								tried_servers = []
