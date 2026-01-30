@@ -14,7 +14,7 @@ from inspect import stack
 from os import unlink
 from pathlib import Path
 from socket import socket
-from threading import Thread, current_thread
+from threading import Thread, Lock, current_thread
 
 try:
 	from flask import Flask, jsonify, abort, send_from_directory
@@ -195,6 +195,14 @@ def get_city(file_md5):
 	abort(404)
 
 
+def sanitize_filename(filename):
+	"""Sanitize a filename by replacing unsafe characters."""
+	unsafe_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
+	for char in unsafe_chars:
+		filename = filename.replace(char, '_')
+	return filename
+
+
 class Scanner(Thread):
 
 
@@ -205,11 +213,32 @@ class Scanner(Thread):
 
 		self.MAX_THREADS = 50
 
-		self.new_servers = dict()
+		# Load servers from disk
+		self.new_servers = self._load_servers_from_disk()
 		self.servers = self.new_servers
 		self.server_queue = SC4MP_SERVERS.copy()
 		self.thread_count = 0
 		self.end = False
+		self.download_lock = Lock()  # Ensure only one server downloads files at a time
+
+
+	def _load_servers_from_disk(self):
+		"""Load all servers from disk on startup."""
+		servers = {}
+		if os.path.exists(SC4MP_SERVERS_DIR):
+			for filename in os.listdir(SC4MP_SERVERS_DIR):
+				if filename.endswith('.json'):
+					filepath = os.path.join(SC4MP_SERVERS_DIR, filename)
+					try:
+						with open(filepath, 'r') as f:
+							server_data = json.load(f)
+							server_id = filename[:-5]  # Remove .json extension
+							servers[server_id] = server_data
+					except Exception as e:
+						print(f"[WARNING] Failed to load server from {filename}: {e}")
+		if servers:
+			print(f"Loaded {len(servers)} servers from disk")
+		return servers
 
 
 	def run(self):
@@ -305,6 +334,17 @@ class Scanner(Thread):
 			self.server = server
 
 
+		def _save_server_to_disk(self, server_id, server_data):
+			"""Save server data to disk."""
+			try:
+				filename = sanitize_filename(server_id) + ".json"
+				filepath = os.path.join(SC4MP_SERVERS_DIR, filename)
+				with open(filepath, 'w') as f:
+					json.dump(server_data, f, indent=2)
+			except Exception as e:
+				print(f"[WARNING] Failed to save server {server_id} to disk: {e}")
+
+
 		def run(self):
 
 			print(f"Fetching server at {self.server[0]}:{self.server[1]}...")
@@ -341,12 +381,20 @@ class Scanner(Thread):
 						self.server_list_0_8()
 						entry["info"] = self.server_info_0_8()
 						if not entry["info"]["private"]:
-							entry["stats"] = self.server_stats_0_8(server_id)
+							# Acquire lock to ensure only one server downloads files at a time
+							with self.parent.download_lock:
+								entry["stats"] = self.server_stats_0_8(server_id)
 					else:
 						self.server_list()
 						entry["info"] = self.server_info()
 						if not entry["info"]["private"]:
-							entry["stats"] = self.server_stats(server_id)
+							# Acquire lock to ensure only one server downloads files at a time
+							with self.parent.download_lock:
+								entry["stats"] = self.server_stats(server_id)
+
+					# Save server to disk immediately after fetching (skip if server_id is empty)
+					if server_id:
+						self._save_server_to_disk(server_id, entry)
 
 				except TimeoutError:
 
