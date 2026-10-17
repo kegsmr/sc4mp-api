@@ -315,7 +315,9 @@ class Scanner(Thread):
 
 					print(f"[WARNING] Failed to fetch server at {self.server[0]}:{self.server[1]}: {e}")
 
-				self.parent.thread_count -= 1
+				finally:
+
+					self.parent.thread_count -= 1
 
 			except KeyboardInterrupt:
 
