@@ -34,6 +34,8 @@ SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 
 SC4MP_BUFFER_SIZE = BUFFER_SIZE
 
+SC4MP_SERVER_EXPIRY = 30 # days
+
 
 def init():
 
@@ -219,6 +221,10 @@ class Scanner(Thread):
 								#	pass
 
 								for server_id, entry in self.servers.items():
+									# Drop servers that haven't responded in a while
+									updated = entry.get("updated")
+									if updated and datetime.utcnow() - datetime.strptime(updated, "%Y-%m-%d %H:%M:%S") > timedelta(days=SC4MP_SERVER_EXPIRY):
+										continue
 									self.new_servers.setdefault(server_id, entry)
 
 								for server_id in self.new_servers.keys():
