@@ -185,6 +185,7 @@ def get_server_regions(server_id):
 			"cities": len(checksums),
 			"ready": sum(1 for checksum in checksums if city_cached(checksum)),
 			"map": f"/servers/{urllib.parse.quote(server_id, safe='')}/regions/{urllib.parse.quote(region, safe='')}/map.png",
+			"map_cities": f"/servers/{urllib.parse.quote(server_id, safe='')}/regions/{urllib.parse.quote(region, safe='')}/map.json",
 		}
 		for region, checksums in regions.items()
 	})
@@ -226,6 +227,36 @@ def get_region_map(server_id, region):
 	return send_file(str(path.resolve()), mimetype="image/png", max_age=300)
 
 
+@app.route("/servers/<server_id>/regions/<region>/map.json", methods=["GET"])
+def get_region_map_cities(server_id, region):
+	"""Where each city is on the region map (its outline, as fractions of the map's width and height, front to back) and its stats, for showing city info over the map."""
+
+	checksums = sc4mp_scanner.region_maps.get(server_id, {}).get(region)
+
+	if checksums is None:
+		abort(404)
+
+	layout = regionmaps.region_map_layout([checksum for checksum in checksums if city_cached(checksum)])
+	if layout is None:
+		abort(404)
+	cities, width, height = layout
+
+	stats = sc4mp_scanner.region_cities.get(server_id, {}).get(region, {})
+
+	return jsonify({
+		"width": width,
+		"height": height,
+		"cities": [
+			dict(
+				{"x": city["x"], "y": city["y"], "size": city["size"], "city_name": city.get("city_name"), "mayor_name": city.get("mayor_name")},
+				**stats.get(city["checksum"], {}),
+				outline=[[round(x / width, 5), round(y / height, 5)] for x, y in regionmaps.city_outline(city)],
+			)
+			for city in reversed(cities)
+		],
+	})
+
+
 class Scanner(Thread):
 
 
@@ -241,6 +272,7 @@ class Scanner(Thread):
 		self.server_queue = SC4MP_SERVERS.copy()
 		self.thread_count = 0
 		self.region_maps = {}	# savegame MD5s in each region, by server ID and region name
+		self.region_cities = {}	# each city's stats from the region's region.json, by server ID, region name and savegame MD5
 		self.end = False
 
 
@@ -502,6 +534,29 @@ class Scanner(Thread):
 			}
 
 
+		def _record_region_cities(self, temp_dir, server_id):
+			"""Keeps the public stats of each city in the downloaded regions' databases, by savegame MD5, for the region maps."""
+
+			FIELDS = ["city_name", "mayor_name", "population", "residential_population", "commercial_population", "industrial_population", "mayor_rating", "difficulty", "total_funds", "modified"]
+
+			regions_path = os.path.join(temp_dir, "Regions")
+			if not os.path.exists(regions_path):
+				return
+
+			regions = {}
+			for region in os.listdir(regions_path):
+				region_database = self._load_json(os.path.join(regions_path, region, "_Database", "region.json"))
+				cities = {}
+				for city_entry in region_database.values():
+					if isinstance(city_entry, dict) and is_md5(city_entry.get("hashcode")):
+						city = {field: city_entry.get(field) for field in FIELDS}
+						city["claimed"] = city_entry.get("owner") is not None
+						cities[city_entry["hashcode"]] = city
+				regions[region] = cities
+
+			self.parent.region_cities[server_id] = regions
+
+
 		def _prune_file_table(self, target, file_table, server_id):
 			"""Keeps the files needed for the stats (`region.json` and `config.bmp`), and the savegames not in the city cache yet, for the region maps (up to `SC4MP_MAP_DOWNLOAD_LIMIT` bytes per scan). Records the savegames in each region."""
 
@@ -638,6 +693,9 @@ class Scanner(Thread):
 
 			# Calculate region statistics
 			region_stats = self._calculate_region_stats(temp_dir, server_time)
+
+			# Keep each city's stats, for the region maps
+			self._record_region_cities(temp_dir, server_id)
 
 			# Build entry
 			entry = {
@@ -779,6 +837,9 @@ class Scanner(Thread):
 
 			# Calculate region statistics
 			region_stats = self._calculate_region_stats(temp_dir, server_time)
+
+			# Keep each city's stats, for the region maps
+			self._record_region_cities(temp_dir, server_id)
 
 			# Build entry
 			entry = {
