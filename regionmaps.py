@@ -64,7 +64,7 @@ def cache_city(path, checksum):
 
 	try:
 
-		savegame = SC4Savegame(path, error_callback=None)
+		savegame = SC4Savegame(path, error_callback=lambda message: None)	# the reader reports some harmless decompression warnings (eg. trailing bytes) through this; without a callback they raise
 		try:
 			info = savegame.get_SC4ReadRegionalCity()
 			image = None
