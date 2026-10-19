@@ -22,7 +22,6 @@ try:
 	sc4mp_has_flask = True
 except ImportError:
 	sc4mp_has_flask = False
-
 	# Stand-in so the route decorators below don't fail at import when Flask is missing
 	class NoFlask:
 		def after_request(self, function):
