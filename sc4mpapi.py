@@ -34,7 +34,7 @@ SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 
 SC4MP_BUFFER_SIZE = BUFFER_SIZE
 
-SC4MP_SERVER_EXPIRY = timedelta(days=1)
+SC4MP_SERVER_EXPIRY = timedelta(days=30)
 
 
 def init():
