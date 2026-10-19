@@ -23,6 +23,14 @@ try:
 except ImportError:
 	sc4mp_has_flask = False
 
+	# Stand-in so the route decorators below don't fail at import when Flask is missing
+	class NoFlask:
+		def after_request(self, function):
+			return function
+		def route(self, *args, **kwargs):
+			return lambda function: function
+	app = NoFlask()
+
 from core.networking import \
 	ClientSocket, NetworkException, ConnectionClosedException, \
 	send_json, recv_json, BUFFER_SIZE
