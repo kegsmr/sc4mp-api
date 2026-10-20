@@ -70,7 +70,7 @@ def is_default_ground(r, g, b):
 
 
 def clean_city_image(data):
-	"""Makes the opaque black background some region view images have (SC4's empty city image) transparent. Returns the PNG, the share of the city drawn with the default ground, its most common other color, and whether it was the empty city image."""
+	"""Makes the opaque black background some region view images have (SC4's empty city image) transparent. Returns the PNG, the share of the city drawn with the default ground, its most common land and water colors, and whether it was the empty city image."""
 
 	image = Image.open(io.BytesIO(data)).convert("RGBA")
 	width, height = image.size
@@ -91,18 +91,23 @@ def clean_city_image(data):
 		data = output.getvalue()
 
 	opaque = default = 0
-	colors = {}
+	land = {}
+	water = {}
 	for r, g, b, a in image.getdata():
 		if a < 128:
 			continue
 		opaque += 1
 		if is_default_ground(r, g, b):
 			default += 1
-		else:
-			color = (r // 8 * 8 + 4, g // 8 * 8 + 4, b // 8 * 8 + 4)
-			colors[color] = colors.get(color, 0) + 1
+			continue
+		color = (r // 8 * 8 + 4, g // 8 * 8 + 4, b // 8 * 8 + 4)
+		if b > r + 16 and b > g + 8:
+			water[color] = water.get(color, 0) + 1
+		elif max(r, g, b) - min(r, g, b) >= 16:	# not the grey edges, roads or buildings
+			land[color] = land.get(color, 0) + 1
 
-	return data, round(default / max(1, opaque), 3), list(max(colors, key=colors.get)) if colors else None, blank
+	most = lambda colors: list(max(colors, key=colors.get)) if colors else None
+	return data, round(default / max(1, opaque), 3), most(land), most(water), blank
 
 
 def repaint_default_ground(image, color, seed):
@@ -140,7 +145,7 @@ def cache_city(path, checksum):
 			raise ValueError("The savegame has no region view image.")
 
 		width, height = struct.unpack(">II", image[16:24])
-		image, default_ground, ground, blank = clean_city_image(image) if sc4mp_has_pillow else (image, 0, None, False)
+		image, default_ground, ground, water, blank = clean_city_image(image) if sc4mp_has_pillow else (image, 0, None, None, False)
 
 		city = {
 			"x": info["tileXLocation"],
@@ -152,6 +157,7 @@ def cache_city(path, checksum):
 			"mayor_name": info.get("mayorName"),
 			"default_ground": default_ground,
 			"ground": ground,
+			"water": water,
 			"blank": blank,
 		}
 
@@ -162,6 +168,22 @@ def cache_city(path, checksum):
 		city = {"error": str(e)}	# not downloaded again
 
 	write_atomic(SC4MP_CITIES_PATH / f"{checksum}.json", json.dumps(city).encode())
+
+
+def water_under(image, city, water):
+	"""Puts water under a city's region view image, at its tile's base. SC4 draws the sea separately in the region view, so where a city is low its image is see-through."""
+
+	size = city["size"]
+	raised = image.height - (64 * size + 21)
+	left = (0, raised + size * Y[1])
+	top = (-size * Y[0], raised)
+	right = (top[0] + size * X[0], raised + size * X[1])
+	bottom = (size * X[0], left[1] + size * X[1])
+	edge = 18
+	under = Image.new("RGBA", image.size, (0, 0, 0, 0))
+	ImageDraw.Draw(under).polygon([left, top, right, (right[0], right[1] + edge), (bottom[0], bottom[1] + edge), (left[0], left[1] + edge)], fill=tuple(water) + (255,))
+	under.alpha_composite(image)
+	return under
 
 
 def read_region_config(path):
@@ -344,8 +366,12 @@ def render_region_map(checksums, width, tiles=None):
 		return None
 	cities, full_width, full_height = layout
 
-	grounds = sorted(city["ground"] for city in cities if city.get("ground") and city.get("default_ground", 0) < 0.1 and not city.get("blank"))
-	ground = [sorted(color[i] for color in grounds)[len(grounds) // 2] for i in range(3)] if grounds else [68, 76, 44]
+	def median(colors, default):
+		colors = list(colors)
+		return [sorted(color[i] for color in colors)[len(colors) // 2] for i in range(3)] if colors else default
+
+	ground = median((city["ground"] for city in cities if city.get("ground") and city.get("default_ground", 0) < 0.1 and not city.get("blank")), [68, 76, 44])
+	water = median((city["water"] for city in cities if city.get("water")), [76, 92, 140])
 
 	scale = min(1, width / full_width)
 	canvas = Image.new("RGBA", (int(full_width * scale) + 1, int(full_height * scale) + 1), (0, 0, 0, 0))
@@ -362,8 +388,9 @@ def render_region_map(checksums, width, tiles=None):
 			continue
 		with Image.open(SC4MP_CITIES_PATH / f"{city['checksum']}.png") as image:
 			image = image.convert("RGBA")
-			if city.get("default_ground", 0) >= 0.15:
+			if city.get("default_ground", 0) >= 0.03:
 				image = repaint_default_ground(image, ground, city["checksum"])
+			image = water_under(image, city, water)
 			if scale < 1:
 				image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
 			canvas.alpha_composite(image, (round(city["left"] * scale), round(city["top"] * scale)))
