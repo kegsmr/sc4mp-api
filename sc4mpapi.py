@@ -38,7 +38,7 @@ from core.networking import \
 	send_json, recv_json, BUFFER_SIZE
 
 import regionmaps
-from regionmaps import SC4MP_CITIES_PATH, SC4MP_MAP_WIDTH, is_md5, city_cached, cache_city, render_region_map
+from regionmaps import SC4MP_CITIES_PATH, SC4MP_MAP_WIDTH, is_md5, city_cached, cache_city, render_region_map, read_region_config
 
 
 SC4MP_TITLE = "SC4MP API"
@@ -207,14 +207,16 @@ def get_region_map(server_id, region):
 	except ValueError:
 		abort(400)
 
+	tiles = sc4mp_scanner.region_tiles.get(server_id, {}).get(region)
+
 	# Maps are cached until a city in the region changes
 	ready = sorted(checksum for checksum in checksums if city_cached(checksum))
 	key = hashlib.sha1(json.dumps([server_id, region, width]).encode()).hexdigest()[:16]
-	version = hashlib.sha1(json.dumps(ready).encode()).hexdigest()[:16]
+	version = hashlib.sha1(json.dumps([ready, tiles]).encode()).hexdigest()[:16]
 	path = SC4MP_MAPS_PATH / f"{key}-{version}.png"
 
 	if not path.exists():
-		image = render_region_map(ready, width)
+		image = render_region_map(ready, width, tiles)
 		if image is None:
 			abort(404)
 		temp = path.with_name(path.name + f".{os.getpid()}.{random.randint(0, 1 << 30)}.tmp")
@@ -236,7 +238,8 @@ def get_region_map_cities(server_id, region):
 	if checksums is None:
 		abort(404)
 
-	layout = regionmaps.region_map_layout([checksum for checksum in checksums if city_cached(checksum)])
+	tiles = sc4mp_scanner.region_tiles.get(server_id, {}).get(region)
+	layout = regionmaps.region_map_layout([checksum for checksum in checksums if city_cached(checksum)], tiles)
 	if layout is None:
 		abort(404)
 	cities, width, height = layout
@@ -252,7 +255,7 @@ def get_region_map_cities(server_id, region):
 				**stats.get(city["checksum"], {}),
 				outline=[[round(x / width, 5), round(y / height, 5)] for x, y in regionmaps.city_outline(city)],
 			)
-			for city in reversed(cities)
+			for city in reversed(cities) if not city.get("empty")
 		],
 	})
 
@@ -273,6 +276,7 @@ class Scanner(Thread):
 		self.thread_count = 0
 		self.region_maps = {}	# savegame MD5s in each region, by server ID and region name
 		self.region_cities = {}	# each city's stats from the region's region.json, by server ID, region name and savegame MD5
+		self.region_tiles = {}	# each region's tiles from its config.bmp, by server ID and region name
 		self.end = False
 
 
@@ -544,7 +548,12 @@ class Scanner(Thread):
 				return
 
 			regions = {}
+			tiles = {}
 			for region in os.listdir(regions_path):
+				try:
+					tiles[region] = read_region_config(os.path.join(regions_path, region, "config.bmp"))
+				except Exception:
+					pass
 				region_database = self._load_json(os.path.join(regions_path, region, "_Database", "region.json"))
 				cities = {}
 				for city_entry in region_database.values():
@@ -555,6 +564,7 @@ class Scanner(Thread):
 				regions[region] = cities
 
 			self.parent.region_cities[server_id] = regions
+			self.parent.region_tiles[server_id] = tiles
 
 
 		def _prune_file_table(self, target, file_table, server_id):

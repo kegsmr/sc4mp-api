@@ -22,7 +22,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 try:
-	from PIL import Image
+	from PIL import Image, ImageDraw
 	sc4mp_has_pillow = True
 except ImportError:
 	sc4mp_has_pillow = False
@@ -70,14 +70,15 @@ def is_default_ground(r, g, b):
 
 
 def clean_city_image(data):
-	"""Makes the opaque black background some region view images have (SC4's empty city image) transparent. Returns the PNG, the share of the city drawn with the default ground, and its most common other color."""
+	"""Makes the opaque black background some region view images have (SC4's empty city image) transparent. Returns the PNG, the share of the city drawn with the default ground, its most common other color, and whether it was the empty city image."""
 
 	image = Image.open(io.BytesIO(data)).convert("RGBA")
 	width, height = image.size
 	pixels = image.load()
 
 	# Black background, from the edges inwards
-	if pixels[0, 0] == (0, 0, 0, 255) or pixels[width - 1, 0] == (0, 0, 0, 255):
+	blank = pixels[0, 0] == (0, 0, 0, 255) or pixels[width - 1, 0] == (0, 0, 0, 255)
+	if blank:
 		stack = [(x, y) for x in range(width) for y in (0, height - 1)] + [(x, y) for x in (0, width - 1) for y in range(height)]
 		while stack:
 			x, y = stack.pop()
@@ -101,7 +102,7 @@ def clean_city_image(data):
 			color = (r // 8 * 8 + 4, g // 8 * 8 + 4, b // 8 * 8 + 4)
 			colors[color] = colors.get(color, 0) + 1
 
-	return data, round(default / max(1, opaque), 3), list(max(colors, key=colors.get)) if colors else None
+	return data, round(default / max(1, opaque), 3), list(max(colors, key=colors.get)) if colors else None, blank
 
 
 def repaint_default_ground(image, color, seed):
@@ -139,7 +140,7 @@ def cache_city(path, checksum):
 			raise ValueError("The savegame has no region view image.")
 
 		width, height = struct.unpack(">II", image[16:24])
-		image, default_ground, ground = clean_city_image(image) if sc4mp_has_pillow else (image, 0, None)
+		image, default_ground, ground, blank = clean_city_image(image) if sc4mp_has_pillow else (image, 0, None, False)
 
 		city = {
 			"x": info["tileXLocation"],
@@ -151,6 +152,7 @@ def cache_city(path, checksum):
 			"mayor_name": info.get("mayorName"),
 			"default_ground": default_ground,
 			"ground": ground,
+			"blank": blank,
 		}
 
 		write_atomic(SC4MP_CITIES_PATH / f"{checksum}.png", image)
@@ -160,6 +162,87 @@ def cache_city(path, checksum):
 		city = {"error": str(e)}	# not downloaded again
 
 	write_atomic(SC4MP_CITIES_PATH / f"{checksum}.json", json.dumps(city).encode())
+
+
+def read_region_config(path):
+	"""Reads a region's `config.bmp`: each tile's position and size (reddish pixels are small tiles, greenish medium and bluish large, like SC4)."""
+
+	with Image.open(path) as image:
+		image = image.convert("RGB")
+		width, height = image.size
+		pixels = image.load()
+
+	tiles = []
+	covered = set()
+	for y in range(height):
+		for x in range(width):
+			if (x, y) in covered:
+				continue
+			r, g, b = pixels[x, y]
+			if max(r, g, b) < 128:
+				continue
+			size = 1 if r >= max(g, b) else 2 if g >= b else 4
+			tiles.append((x, y, size))
+			covered.update((x + dx, y + dy) for dx in range(size) for dy in range(size))
+
+	return tiles
+
+
+SC4MP_BLANK_CITY = None	# path of a cached copy of SC4's empty (large) city image, for the region's empty tiles
+
+
+def empty_tile_image(size, ground):
+	"""The image of an empty tile: SC4's empty city image, cut down to the tile's size from its front corner (so it keeps the edges) and tinted to the region's usual ground. Drawn plainly if no empty city image has been cached yet."""
+
+	global SC4MP_BLANK_CITY
+
+	if SC4MP_BLANK_CITY is None:
+		SC4MP_BLANK_CITY = ""
+		for path in SC4MP_CITIES_PATH.glob("*.json"):
+			city = load_city(path.stem)
+			if city and city.get("blank") and city.get("size") == 4 and path.with_suffix(".png").exists():
+				SC4MP_BLANK_CITY = str(path.with_suffix(".png"))
+				break
+
+	width, height = 128 * size + 2, 64 * size + 21
+	edge = 21
+	left = (0, size * Y[1])
+	top = (-size * Y[0], 0)
+	right = (top[0] + size * X[0], size * X[1])
+	bottom = (size * X[0], left[1] + size * X[1])
+	outline = [left, top, right, (right[0], right[1] + edge), (bottom[0], bottom[1] + edge), (left[0], left[1] + edge)]
+
+	if SC4MP_BLANK_CITY:
+
+		with Image.open(SC4MP_BLANK_CITY) as source:
+			source = source.convert("RGBA")
+
+		# The front s x s part of the large tile
+		raised = source.height - (64 * 4 + 21)
+		offset = 4 - size
+		corner = (4 * -Y[0] + offset * (X[0] + Y[0]) + size * Y[0], raised + offset * (X[1] + Y[1]))
+		image = source.crop((round(corner[0]), round(corner[1]), round(corner[0]) + width, round(corner[1]) + height))
+		mask = Image.new("L", image.size, 0)
+		ImageDraw.Draw(mask).polygon(outline, fill=255)
+		alpha = image.getchannel("A")
+		image.putalpha(Image.composite(alpha, mask, mask))
+
+		# Tinted to the region's ground (the empty city image is grass)
+		r, g, b = (sum(c) / max(1, len(c)) for c in zip(*[p[:3] for p in image.crop((width // 3, height // 3, 2 * width // 3, height // 2)).getdata()]))
+		bands = image.split()
+		tint = [ground[0] / max(1, r), ground[1] / max(1, g), ground[2] / max(1, b)]
+		tops = Image.new("L", image.size, 0)
+		ImageDraw.Draw(tops).polygon([left, top, right, (right[0], right[1] + 1), (bottom[0], bottom[1] + 1), (left[0], left[1] + 1)], fill=255, outline=255)	# only the ground, not the edges
+		tinted = [band.point(lambda v, t=t: min(255, int(v * t))) for band, t in zip(bands[:3], tint)]
+		image = Image.merge("RGBA", [Image.composite(t, band, tops) for t, band in zip(tinted, bands[:3])] + [bands[3]])
+		return image
+
+	image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+	draw = ImageDraw.Draw(image)
+	draw.polygon([left, bottom, (bottom[0], bottom[1] + edge), (left[0], left[1] + edge)], fill=(112, 106, 98, 255))
+	draw.polygon([bottom, right, (right[0], right[1] + edge), (bottom[0], bottom[1] + edge)], fill=(84, 80, 74, 255))
+	draw.polygon([left, top, right, bottom], fill=tuple(ground) + (255,))
+	return image
 
 
 def region_map_order(cities):
@@ -201,8 +284,8 @@ def region_map_order(cities):
 	return order
 
 
-def region_map_layout(checksums):
-	"""Places the cities' region view images like SC4's region view, at full size. Returns the cities in drawing order (back to front), each with its image's `left` and `top`, and the map's size, or None if no city has an image."""
+def region_map_layout(checksums, tiles=None):
+	"""Places the cities' region view images like SC4's region view, at full size. The region's other tiles (from `read_region_config`) are added as empty tiles (with `"empty": True`). Returns the cities in drawing order (back to front), each with its image's `left` and `top`, and the map's size, or None if no city has an image."""
 
 	cities = []
 	for checksum in checksums:
@@ -212,6 +295,14 @@ def region_map_layout(checksums):
 			cities.append(city)
 	if not cities:
 		return None
+
+	# Tiles without a city
+	covered = set((city["x"] + dx, city["y"] + dy) for city in cities for dx in range(city["size"]) for dy in range(city["size"]))
+	for x, y, size in tiles or []:
+		cells = set((x + dx, y + dy) for dx in range(size) for dy in range(size))
+		if not cells & covered:
+			cities.append({"x": x, "y": y, "size": size, "width": 128 * size + 2, "height": 64 * size + 21, "empty": True})
+			covered |= cells
 
 	# Position of each city's image. The image's left edge is the tile's left corner, and terrain higher than the tile's top corner makes the image taller
 	for city in cities:
@@ -245,21 +336,30 @@ def city_outline(city):
 	return [(left[0], left[1] - raised), (top[0], top[1] - raised), (right[0], right[1] - raised), (right[0], right[1] + edge), (bottom[0], bottom[1] + edge), (left[0], left[1] + edge)]
 
 
-def render_region_map(checksums, width):
-	"""Assembles a region map from the cities' region view images, like SC4's region view, scaled to `width` pixels or less. Cities drawn with the default ground get the region's usual ground instead."""
+def render_region_map(checksums, width, tiles=None):
+	"""Assembles a region map from the cities' region view images, like SC4's region view, scaled to `width` pixels or less. Cities drawn with the default ground get the region's usual ground instead, and the region's tiles without a city (from `read_region_config`) are drawn empty."""
 
-	layout = region_map_layout(checksums)
+	layout = region_map_layout(checksums, tiles)
 	if layout is None:
 		return None
 	cities, full_width, full_height = layout
 
-	grounds = sorted(city["ground"] for city in cities if city.get("ground") and city.get("default_ground", 0) < 0.1)
+	grounds = sorted(city["ground"] for city in cities if city.get("ground") and city.get("default_ground", 0) < 0.1 and not city.get("blank"))
 	ground = [sorted(color[i] for color in grounds)[len(grounds) // 2] for i in range(3)] if grounds else [68, 76, 44]
 
 	scale = min(1, width / full_width)
 	canvas = Image.new("RGBA", (int(full_width * scale) + 1, int(full_height * scale) + 1), (0, 0, 0, 0))
 
+	empty_tiles = {}
 	for city in cities:
+		if city.get("empty"):
+			if city["size"] not in empty_tiles:
+				empty_tiles[city["size"]] = empty_tile_image(city["size"], ground)
+			image = empty_tiles[city["size"]]
+			if scale < 1:
+				image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
+			canvas.alpha_composite(image, (round(city["left"] * scale), round(city["top"] * scale)))
+			continue
 		with Image.open(SC4MP_CITIES_PATH / f"{city['checksum']}.png") as image:
 			image = image.convert("RGBA")
 			if city.get("default_ground", 0) >= 0.15:
@@ -304,7 +404,8 @@ def main():
 
 		print(f"{len(checksums)} cities in {region.name}")
 
-		image = render_region_map(checksums, args.width or 10 ** 9)
+		tiles = read_region_config(region / "config.bmp") if (region / "config.bmp").exists() else None
+		image = render_region_map(checksums, args.width or 10 ** 9, tiles)
 		if image is None:
 			sys.exit("No cities with region view images found.")
 
