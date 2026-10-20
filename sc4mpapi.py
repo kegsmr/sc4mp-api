@@ -61,7 +61,7 @@ SC4MP_CITIES_PATH = Path("_SC4MP") / "_Cache" / "Cities"	# each savegame's regio
 SC4MP_MAPS_PATH = Path("_SC4MP") / "_Cache" / "Maps"		# assembled region maps
 SC4MP_MAP_WIDTH = 1600					# default width of a region map
 SC4MP_MAP_DOWNLOAD_LIMIT = 100_000_000	# bytes of new savegames downloaded per server per scan, so big servers fill in over a few scans
-SC4MP_MAP_MAX_WIDTH = 4096
+SC4MP_MAP_WIDTHS = (400, 800, 1600, 4096)	# widths a region map is rendered at (requested widths are rounded up to one of these)
 SC4MP_MAP_X = (90.5, 17.75)	# screen offset of one tile along a city's x axis in the region view
 SC4MP_MAP_Y = (-37.25, 45.0)	# screen offset of one tile along a city's y axis
 
@@ -561,9 +561,16 @@ def get_region_map(server_id, region):
 		abort(503)
 
 	try:
-		width = max(100, min(SC4MP_MAP_MAX_WIDTH, int(request.args.get("width", SC4MP_MAP_WIDTH))))
+		requested_width = int(request.args.get("width", SC4MP_MAP_WIDTH))
 	except ValueError:
 		abort(400)
+
+	# Only render a few sizes, so requests for every width can't each make a new render and cache file
+	width = SC4MP_MAP_WIDTHS[-1]
+	for size in SC4MP_MAP_WIDTHS:
+		if requested_width <= size:
+			width = size
+			break
 
 	tiles = sc4mp_scanner.region_tiles.get(server_id, {}).get(region)
 
