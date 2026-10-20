@@ -371,7 +371,6 @@ def render_region_map(checksums, width, tiles=None):
 		return [sorted(color[i] for color in colors)[len(colors) // 2] for i in range(3)] if colors else default
 
 	ground = median((city["ground"] for city in cities if city.get("ground") and city.get("default_ground", 0) < 0.1 and not city.get("blank")), [68, 76, 44])
-	water = median((city["water"] for city in cities if city.get("water")), [76, 92, 140])
 
 	scale = min(1, width / full_width)
 	canvas = Image.new("RGBA", (int(full_width * scale) + 1, int(full_height * scale) + 1), (0, 0, 0, 0))
@@ -390,7 +389,8 @@ def render_region_map(checksums, width, tiles=None):
 			image = image.convert("RGBA")
 			if city.get("default_ground", 0) >= 0.03:
 				image = repaint_default_ground(image, ground, city["checksum"])
-			image = water_under(image, city, water)
+			if city.get("water"):	# only under cities with water, so eg. Mars doesn't get water in the gaps between its tiles
+				image = water_under(image, city, city["water"])
 			if scale < 1:
 				image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
 			canvas.alpha_composite(image, (round(city["left"] * scale), round(city["top"] * scale)))
