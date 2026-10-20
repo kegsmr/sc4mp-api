@@ -63,14 +63,14 @@ def load_city(checksum):
 		return None
 
 
-def is_default_ground(r, g, b):
-	"""Whether a pixel is the plain blue-grey (or white) ground SC4 draws when a city's terrain textures are missing, eg. when it was saved without the region's terrain mod."""
+def is_snow(r, g, b):
+	"""Whether a pixel is snow-covered ground (blue-grey or white), eg. from a winter terrain mod."""
 
 	return (168 <= r <= 215 and g >= r - 2 and 2 <= b - r <= 24 and max(r, g, b) - min(r, g, b) <= 24) or (min(r, g, b) >= 240 and max(r, g, b) - min(r, g, b) <= 6)
 
 
 def clean_city_image(data):
-	"""Makes the opaque black background some region view images have (SC4's empty city image) transparent. Returns the PNG, the share of the city drawn with the default ground, its most common land and water colors, and whether it was the empty city image."""
+	"""Makes the opaque black background some region view images have (SC4's empty city image) transparent. Returns the PNG, the share of the city covered in snow, its most common land and water colors, and whether it was the empty city image."""
 
 	image = Image.open(io.BytesIO(data)).convert("RGBA")
 	width, height = image.size
@@ -90,15 +90,15 @@ def clean_city_image(data):
 		image.save(output, format="PNG", optimize=True)
 		data = output.getvalue()
 
-	opaque = default = 0
+	opaque = snow = 0
 	land = {}
 	water = {}
 	for r, g, b, a in image.getdata():
 		if a < 128:
 			continue
 		opaque += 1
-		if is_default_ground(r, g, b):
-			default += 1
+		if is_snow(r, g, b):
+			snow += 1
 			continue
 		color = (r // 8 * 8 + 4, g // 8 * 8 + 4, b // 8 * 8 + 4)
 		if b > r + 16 and b > g + 8:
@@ -107,21 +107,7 @@ def clean_city_image(data):
 			land[color] = land.get(color, 0) + 1
 
 	most = lambda colors: list(max(colors, key=colors.get)) if colors else None
-	return data, round(default / max(1, opaque), 3), most(land), most(water), blank
-
-
-def repaint_default_ground(image, color, seed):
-	"""Repaints the default ground in `color` (the region's usual ground), keeping its shading and whatever is built on it."""
-
-	rng = random.Random(seed)
-	pixels = image.load()
-	for y in range(image.height):
-		for x in range(image.width):
-			r, g, b, a = pixels[x, y]
-			if a and is_default_ground(r, g, b):
-				shade = (r + g + b) / (744 if min(r, g, b) >= 240 else 588) * (1 + rng.uniform(-0.06, 0.06))	# relative to flat grey or white ground
-				pixels[x, y] = (min(255, int(color[0] * shade)), min(255, int(color[1] * shade)), min(255, int(color[2] * shade)), a)
-	return image
+	return data, round(snow / max(1, opaque), 3), most(land), most(water), blank
 
 
 def cache_city(path, checksum):
@@ -145,7 +131,7 @@ def cache_city(path, checksum):
 			raise ValueError("The savegame has no region view image.")
 
 		width, height = struct.unpack(">II", image[16:24])
-		image, default_ground, ground, water, blank = clean_city_image(image) if sc4mp_has_pillow else (image, 0, None, None, False)
+		image, snow, ground, water, blank = clean_city_image(image) if sc4mp_has_pillow else (image, 0, None, None, False)
 
 		city = {
 			"x": info["tileXLocation"],
@@ -155,7 +141,7 @@ def cache_city(path, checksum):
 			"height": height,
 			"city_name": info.get("cityName"),
 			"mayor_name": info.get("mayorName"),
-			"default_ground": default_ground,
+			"snow": snow,
 			"ground": ground,
 			"water": water,
 			"blank": blank,
@@ -359,7 +345,7 @@ def city_outline(city):
 
 
 def render_region_map(checksums, width, tiles=None):
-	"""Assembles a region map from the cities' region view images, like SC4's region view, scaled to `width` pixels or less. Cities drawn with the default ground get the region's usual ground instead, and the region's tiles without a city (from `read_region_config`) are drawn empty."""
+	"""Assembles a region map from the cities' region view images, like SC4's region view, scaled to `width` pixels or less. The region's tiles without a city (from `read_region_config`) are drawn empty."""
 
 	layout = region_map_layout(checksums, tiles)
 	if layout is None:
@@ -370,7 +356,7 @@ def render_region_map(checksums, width, tiles=None):
 		colors = list(colors)
 		return [sorted(color[i] for color in colors)[len(colors) // 2] for i in range(3)] if colors else default
 
-	ground = median((city["ground"] for city in cities if city.get("ground") and city.get("default_ground", 0) < 0.1 and not city.get("blank")), [68, 76, 44])
+	ground = median((city["ground"] for city in cities if city.get("ground") and city.get("snow", 0) < 0.1 and not city.get("blank")), [68, 76, 44])	# for the empty tiles
 
 	scale = min(1, width / full_width)
 	canvas = Image.new("RGBA", (int(full_width * scale) + 1, int(full_height * scale) + 1), (0, 0, 0, 0))
@@ -387,8 +373,6 @@ def render_region_map(checksums, width, tiles=None):
 			continue
 		with Image.open(SC4MP_CITIES_PATH / f"{city['checksum']}.png") as image:
 			image = image.convert("RGBA")
-			if city.get("default_ground", 0) >= 0.03:
-				image = repaint_default_ground(image, ground, city["checksum"])
 			if city.get("water"):	# only under cities with water, so eg. Mars doesn't get water in the gaps between its tiles
 				image = water_under(image, city, city["water"])
 			if scale < 1:
