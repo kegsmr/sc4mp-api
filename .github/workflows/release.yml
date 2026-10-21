@@ -1,0 +1,32 @@
+name: Release
+
+# After each push to main (that is, after a pull request is merged), publish the next release: R1, R2, ...
+on:
+  push:
+    branches: [main]
+
+# One release at a time, so two quick merges don't get the same number
+concurrency:
+  group: release
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Don't release code that doesn't even compile
+      - name: Check the code compiles
+        run: python3 -m compileall -q sc4mpapi.py core
+
+      - name: Publish the next release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          last=$(gh api "repos/$REPO/tags" --paginate --jq '.[].name' | grep -E '^R[0-9]+$' | sed 's/^R//' | sort -n | tail -n 1)
+          next=$((${last:-0} + 1))
+          gh release create "R$next" --repo "$REPO" --target "$GITHUB_SHA" --title "Release $next" --generate-notes
