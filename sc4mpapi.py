@@ -57,10 +57,11 @@ SC4MP_BUFFER_SIZE = BUFFER_SIZE
 SC4MP_SERVER_EXPIRY = 30 # days
 
 # Region maps
-SC4MP_CITIES_PATH = Path("_SC4MP") / "_Cache" / "Cities"	# each savegame's region view image and location, by MD5
-SC4MP_MAPS_PATH = Path("_SC4MP") / "_Cache" / "Maps"		# assembled region maps
-SC4MP_SERVERS_PATH = Path("_SC4MP") / "_API" / "servers"	# the servers found, so they're served again right after a restart
-SC4MP_REGIONS_PATH = Path("_SC4MP") / "_API" / "regions"	# each server's regions, for its region maps after a restart
+SC4MP_DATABASE_PATH = Path("_SC4MP") / "_Database"
+SC4MP_SERVERS_PATH = SC4MP_DATABASE_PATH / "servers"	# the servers found, so they're served again right after a restart
+SC4MP_REGIONS_PATH = SC4MP_DATABASE_PATH / "regions"	# each server's regions, for its region maps after a restart
+SC4MP_CITIES_PATH = SC4MP_DATABASE_PATH / "cities"		# each savegame's region view image, location and stats, by MD5
+SC4MP_MAPS_PATH = SC4MP_DATABASE_PATH / "maps"			# assembled region maps
 SC4MP_MAP_WIDTH = 1600					# default width of a region map
 SC4MP_MAP_DOWNLOAD_LIMIT = 100_000_000	# bytes of new savegames downloaded per server per scan, so big servers fill in over a few scans
 SC4MP_MAP_WIDTHS = (400, 800, 1600, 4096)	# widths a region map is rendered at (requested widths are rounded up to one of these)
