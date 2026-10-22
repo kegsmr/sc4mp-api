@@ -1236,7 +1236,8 @@ class Scanner(Thread):
 					# Prune file table as necessary
 					file_table = self._prune_file_table(target, file_table, server_id)
 
-					# Download files
+					# Download files, on a new connection, since servers can answer one request per connection like the launcher expects
+					s = self.client_socket()
 					for checksum, filesize, relpath, file_data in s.file_table_data(target, file_table):
 
 						# Set the destination
