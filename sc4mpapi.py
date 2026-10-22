@@ -1,12 +1,17 @@
+import hashlib
+import heapq
+import io
 import json
 import os
 import random
+import re
 import shutil
 import struct
 import sys
 import tempfile
 import time
 import traceback
+import urllib.parse
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -14,10 +19,10 @@ from inspect import stack
 from os import unlink
 from pathlib import Path
 from socket import socket
-from threading import Thread, current_thread
+from threading import Thread, Lock, current_thread
 
 try:
-	from flask import Flask, jsonify, abort, send_from_directory
+	from flask import Flask, jsonify, abort, send_from_directory, request, send_file
 	app = Flask(__name__)
 	sc4mp_has_flask = True
 except ImportError:
@@ -34,6 +39,14 @@ from core.networking import \
 	ClientSocket, NetworkException, ConnectionClosedException, \
 	send_json, recv_json, BUFFER_SIZE
 
+from core.dbpf import SC4Savegame
+
+try:
+	from PIL import Image, ImageDraw
+	sc4mp_has_pillow = True
+except ImportError:
+	sc4mp_has_pillow = False
+
 
 SC4MP_TITLE = "SC4MP API"
 
@@ -42,6 +55,18 @@ SC4MP_SERVERS = [("servers.sc4mp.org", port) for port in range(7240, 7250)]
 SC4MP_BUFFER_SIZE = BUFFER_SIZE
 
 SC4MP_SERVER_EXPIRY = 30 # days
+
+# Region maps
+SC4MP_DATABASE_PATH = Path("_SC4MP") / "_Database"
+SC4MP_SERVERS_PATH = SC4MP_DATABASE_PATH / "servers"	# the servers found, so they're served again right after a restart
+SC4MP_REGIONS_PATH = SC4MP_DATABASE_PATH / "regions"	# each server's regions, for its region maps after a restart
+SC4MP_CITIES_PATH = SC4MP_DATABASE_PATH / "cities"		# each savegame's region view image, location and stats, by MD5
+SC4MP_MAPS_PATH = SC4MP_DATABASE_PATH / "maps"			# assembled region maps
+SC4MP_MAP_WIDTH = 1600					# default width of a region map
+SC4MP_MAP_DOWNLOAD_LIMIT = 100_000_000	# bytes of new savegames downloaded per server per scan, so big servers fill in over a few scans
+SC4MP_MAP_WIDTHS = (400, 800, 1600, 4096)	# widths a region map is rendered at (requested widths are rounded up to one of these)
+SC4MP_MAP_X = (90.5, 17.75)	# screen offset of one tile along a city's x axis in the region view
+SC4MP_MAP_Y = (-37.25, 45.0)	# screen offset of one tile along a city's y axis
 
 
 def init():
@@ -52,6 +77,11 @@ def init():
 	current_thread().name = "Main"
 
 	print(SC4MP_TITLE)
+
+	SC4MP_CITIES_PATH.mkdir(parents=True, exist_ok=True)
+	SC4MP_MAPS_PATH.mkdir(parents=True, exist_ok=True)
+	SC4MP_SERVERS_PATH.mkdir(parents=True, exist_ok=True)
+	SC4MP_REGIONS_PATH.mkdir(parents=True, exist_ok=True)
 
 	print("Starting scanner...")
 
@@ -103,6 +133,14 @@ def parse_args():
 	return parser.parse_args()
 
 
+def server_expired(entry):
+	"""Whether a server hasn't responded in `SC4MP_SERVER_EXPIRY` days."""
+
+	updated = entry.get("updated")
+
+	return updated is not None and datetime.utcnow() - datetime.strptime(updated, "%Y-%m-%d %H:%M:%S") > timedelta(days=SC4MP_SERVER_EXPIRY)
+
+
 def get_bitmap_dimensions(filename):
 
 	with open(filename, "rb") as file:
@@ -112,6 +150,398 @@ def get_bitmap_dimensions(filename):
 	height = struct.unpack_from('<i', data, 22)
 
 	return (width[0], height[0])
+
+
+# ===== Region maps =====
+
+def is_md5(checksum):
+
+	return isinstance(checksum, str) and re.fullmatch(r"[0-9a-f]{32}", checksum) is not None
+
+
+def write_atomic(path, data):
+
+	temp = path.with_name(path.name + f".{os.getpid()}.{random.randint(0, 1 << 30)}.tmp")
+	temp.write_bytes(data)
+	os.replace(temp, path)
+
+
+def city_cached(checksum):
+
+	return (SC4MP_CITIES_PATH / f"{checksum}.json").exists()
+
+
+def city_ready(checksum):
+	"""Whether a savegame's region view image is in the city cache. Savegames that couldn't be read are cached too, as an error, so they aren't downloaded again."""
+
+	city = load_city(checksum)
+
+	return city is not None and "error" not in city
+
+
+def load_city(checksum):
+
+	try:
+		with open(SC4MP_CITIES_PATH / f"{checksum}.json", encoding="utf-8") as file:
+			return json.load(file)
+	except Exception:
+		return None
+
+
+def is_snow(r, g, b):
+	"""Whether a pixel is snow-covered ground (blue-grey or white), eg. from a winter terrain mod."""
+
+	return (168 <= r <= 215 and g >= r - 2 and 2 <= b - r <= 24 and max(r, g, b) - min(r, g, b) <= 24) or (min(r, g, b) >= 240 and max(r, g, b) - min(r, g, b) <= 6)
+
+
+def clean_city_image(data):
+	"""Makes the opaque black background some region view images have (SC4's empty city image) transparent. Returns the PNG, the share of the city covered in snow, its most common land and water colors, and whether it was the empty city image."""
+
+	image = Image.open(io.BytesIO(data)).convert("RGBA")
+	width, height = image.size
+	pixels = image.load()
+
+	# Black background, from the edges inwards
+	blank = pixels[0, 0] == (0, 0, 0, 255) or pixels[width - 1, 0] == (0, 0, 0, 255)
+	if blank:
+		stack = [(x, y) for x in range(width) for y in (0, height - 1)] + [(x, y) for x in (0, width - 1) for y in range(height)]
+		while stack:
+			x, y = stack.pop()
+			r, g, b, a = pixels[x, y]
+			if a and r + g + b <= 24:
+				pixels[x, y] = (0, 0, 0, 0)
+				stack += [(x2, y2) for x2, y2 in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)) if 0 <= x2 < width and 0 <= y2 < height]
+		output = io.BytesIO()
+		image.save(output, format="PNG", optimize=True)
+		data = output.getvalue()
+
+	opaque = snow = 0
+	land = {}
+	water = {}
+	for r, g, b, a in image.getdata():
+		if a < 128:
+			continue
+		opaque += 1
+		if is_snow(r, g, b):
+			snow += 1
+			continue
+		color = (r // 8 * 8 + 4, g // 8 * 8 + 4, b // 8 * 8 + 4)
+		if b > r + 16 and b > g + 8:
+			water[color] = water.get(color, 0) + 1
+		elif max(r, g, b) - min(r, g, b) >= 16:	# not the grey edges, roads or buildings
+			land[color] = land.get(color, 0) + 1
+
+	return data, round(snow / max(1, opaque), 3), most_common(land), most_common(water), blank
+
+
+def most_common(colors):
+
+	if not colors:
+		return None
+
+	return list(max(colors, key=colors.get))
+
+
+def cache_city(path, checksum):
+	"""Saves a savegame's region view image (the PNG subfile shown for the city in SC4's region view), its location and its stats in the city cache, by its MD5, for the region maps and `/cities`."""
+
+	global SC4MP_BLANK_CITY
+
+	try:
+
+		savegame = SC4Savegame(path, error_callback=lambda message: None)	# the reader reports some harmless decompression warnings (eg. trailing bytes) through this; without a callback they raise
+		try:
+			info = savegame.get_SC4ReadRegionalCity()
+			try:
+				total_funds = savegame.get_cSC4BudgetSimulator()["totalFunds"]
+			except Exception:
+				total_funds = None
+			image = None
+			for entry in savegame.indexData:
+				if entry['typeID'] == '8a2482b9' and entry['instanceID'] == '00000000':
+					savegame.file.seek(entry['offset'])
+					image = savegame.file.read(entry['filesize'])
+					break
+		finally:
+			savegame.close()
+
+		if not image or image[:8] != b"\x89PNG\r\n\x1a\n":
+			raise ValueError("The savegame has no region view image.")
+
+		width, height = struct.unpack(">II", image[16:24])
+		if sc4mp_has_pillow:
+			image, snow, ground, water, blank = clean_city_image(image)
+		else:
+			snow, ground, water, blank = 0, None, None, False
+
+		city = {
+			"x": info["tileXLocation"],
+			"y": info["tileYLocation"],
+			"size": info["citySizeX"],
+			"width": width,
+			"height": height,
+			"city_name": info.get("cityName"),
+			"mayor_name": info.get("mayorName"),
+			"residential_population": info.get("residentialPopulation"),
+			"commercial_population": info.get("commercialPopulation"),
+			"industrial_population": info.get("industrialPopulation"),
+			"mayor_rating": info.get("mayorRating"),
+			"difficulty": info.get("starCount"),
+			"gamemode": info.get("modeFlag"),
+			"total_funds": total_funds,
+			"snow": snow,
+			"ground": ground,
+			"water": water,
+			"blank": blank,
+		}
+
+		write_atomic(SC4MP_CITIES_PATH / f"{checksum}.png", image)
+
+		# The first empty large city is used for the region maps' empty tiles
+		if not SC4MP_BLANK_CITY and blank and city["size"] == 4:
+			SC4MP_BLANK_CITY = str(SC4MP_CITIES_PATH / f"{checksum}.png")
+
+	except Exception as e:
+
+		city = {"error": str(e)}	# not downloaded again
+
+	write_atomic(SC4MP_CITIES_PATH / f"{checksum}.json", json.dumps(city).encode())
+
+
+def water_under(image, city, water):
+	"""Puts water under a city's region view image, at its tile's base. SC4 draws the sea separately in the region view, so where a city is low its image is see-through."""
+
+	size = city["size"]
+	raised = image.height - (64 * size + 21)
+	left = (0, raised + size * SC4MP_MAP_Y[1])
+	top = (-size * SC4MP_MAP_Y[0], raised)
+	right = (top[0] + size * SC4MP_MAP_X[0], raised + size * SC4MP_MAP_X[1])
+	bottom = (size * SC4MP_MAP_X[0], left[1] + size * SC4MP_MAP_X[1])
+	edge = 18
+	under = Image.new("RGBA", image.size, (0, 0, 0, 0))
+	ImageDraw.Draw(under).polygon([left, top, right, (right[0], right[1] + edge), (bottom[0], bottom[1] + edge), (left[0], left[1] + edge)], fill=tuple(water) + (255,))
+	under.alpha_composite(image)
+	return under
+
+
+def read_region_config(path):
+	"""Reads a region's `config.bmp`: each tile's position and size (reddish pixels are small tiles, greenish medium and bluish large, like SC4)."""
+
+	with Image.open(path) as image:
+		image = image.convert("RGB")
+		width, height = image.size
+		pixels = image.load()
+
+	tiles = []
+	covered = set()
+	for y in range(height):
+		for x in range(width):
+			if (x, y) in covered:
+				continue
+			r, g, b = pixels[x, y]
+			if max(r, g, b) < 128:
+				continue
+			if r >= max(g, b):
+				size = 1
+			elif g >= b:
+				size = 2
+			else:
+				size = 4
+			tiles.append((x, y, size))
+			covered.update((x + dx, y + dy) for dx in range(size) for dy in range(size))
+
+	return tiles
+
+
+SC4MP_BLANK_CITY = None	# path of a cached copy of SC4's empty (large) city image, for the region's empty tiles
+
+sc4mp_map_locks = {}	# a lock for each region map (by cache key), so it's only rendered once at a time
+sc4mp_map_locks_lock = Lock()
+
+
+def empty_tile_image(size, ground):
+	"""The image of an empty tile: SC4's empty city image, cut down to the tile's size from its front corner (so it keeps the edges) and tinted to the region's usual ground. Drawn plainly if no empty city image has been cached yet."""
+
+	global SC4MP_BLANK_CITY
+
+	if SC4MP_BLANK_CITY is None:
+		SC4MP_BLANK_CITY = ""
+		for path in SC4MP_CITIES_PATH.glob("*.json"):
+			city = load_city(path.stem)
+			if city and city.get("blank") and city.get("size") == 4 and path.with_suffix(".png").exists():
+				SC4MP_BLANK_CITY = str(path.with_suffix(".png"))
+				break
+
+	width, height = 128 * size + 2, 64 * size + 21
+	edge = 21
+	left = (0, size * SC4MP_MAP_Y[1])
+	top = (-size * SC4MP_MAP_Y[0], 0)
+	right = (top[0] + size * SC4MP_MAP_X[0], size * SC4MP_MAP_X[1])
+	bottom = (size * SC4MP_MAP_X[0], left[1] + size * SC4MP_MAP_X[1])
+	outline = [left, top, right, (right[0], right[1] + edge), (bottom[0], bottom[1] + edge), (left[0], left[1] + edge)]
+
+	if SC4MP_BLANK_CITY:
+
+		with Image.open(SC4MP_BLANK_CITY) as source:
+			source = source.convert("RGBA")
+
+		# The front s x s part of the large tile
+		raised = source.height - (64 * 4 + 21)
+		offset = 4 - size
+		corner = (4 * -SC4MP_MAP_Y[0] + offset * (SC4MP_MAP_X[0] + SC4MP_MAP_Y[0]) + size * SC4MP_MAP_Y[0], raised + offset * (SC4MP_MAP_X[1] + SC4MP_MAP_Y[1]))
+		image = source.crop((round(corner[0]), round(corner[1]), round(corner[0]) + width, round(corner[1]) + height))
+		mask = Image.new("L", image.size, 0)
+		ImageDraw.Draw(mask).polygon(outline, fill=255)
+		alpha = image.getchannel("A")
+		image.putalpha(Image.composite(alpha, mask, mask))
+
+		# Tinted to the region's ground (the empty city image is grass)
+		r, g, b = (sum(c) / max(1, len(c)) for c in zip(*[p[:3] for p in image.crop((width // 3, height // 3, 2 * width // 3, height // 2)).getdata()]))
+		bands = image.split()
+		tint = [ground[0] / max(1, r), ground[1] / max(1, g), ground[2] / max(1, b)]
+		tops = Image.new("L", image.size, 0)
+		ImageDraw.Draw(tops).polygon([left, top, right, (right[0], right[1] + 1), (bottom[0], bottom[1] + 1), (left[0], left[1] + 1)], fill=255, outline=255)	# only the ground, not the edges
+		tinted = [band.point(lambda v, t=t: min(255, int(v * t))) for band, t in zip(bands[:3], tint)]
+		image = Image.merge("RGBA", [Image.composite(t, band, tops) for t, band in zip(tinted, bands[:3])] + [bands[3]])
+		return image
+
+	image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+	draw = ImageDraw.Draw(image)
+	draw.polygon([left, bottom, (bottom[0], bottom[1] + edge), (left[0], left[1] + edge)], fill=(112, 106, 98, 255))
+	draw.polygon([bottom, right, (right[0], right[1] + edge), (bottom[0], bottom[1] + edge)], fill=(84, 80, 74, 255))
+	draw.polygon([left, top, right, bottom], fill=tuple(ground) + (255,))
+	return image
+
+
+def region_map_order(cities):
+	"""Orders cities back to front, so each one is drawn after the cities it's in front of (those whose +x or +y edge or corner it touches). A single sort key can't do this when cities have different sizes."""
+
+	grid = {}
+	for i, city in enumerate(cities):
+		for dx in range(city["size"]):
+			for dy in range(city["size"]):
+				grid[(city["x"] + dx, city["y"] + dy)] = i
+
+	after = [set() for _ in cities]
+	waiting = [0] * len(cities)
+	for i, city in enumerate(cities):
+		x, y, size = city["x"], city["y"], city["size"]
+		for cell in [(x + size, y + d) for d in range(size)] + [(x + d, y + size) for d in range(size)] + [(x + size, y + size)]:
+			j = grid.get(cell)
+			if j is not None and j != i and j not in after[i]:
+				after[i].add(j)
+				waiting[j] += 1
+
+	key = lambda i: (cities[i]["x"] + cities[i]["y"], i)
+	ready = [key(i) for i in range(len(cities)) if waiting[i] == 0]
+	heapq.heapify(ready)
+	order = []
+	while ready:
+		_, i = heapq.heappop(ready)
+		order.append(i)
+		for j in after[i]:
+			waiting[j] -= 1
+			if waiting[j] == 0:
+				heapq.heappush(ready, key(j))
+
+	# Cities in a cycle (eg. a pinwheel of different sizes) are drawn by their near corner
+	if len(order) < len(cities):
+		done = set(order)
+		order += sorted((i for i in range(len(cities)) if i not in done), key=key)
+
+	return order
+
+
+def region_map_layout(checksums, tiles=None):
+	"""Places the cities' region view images like SC4's region view, at full size. The region's other tiles (from `read_region_config`) are added as empty tiles (with `"empty": True`). Returns the cities in drawing order (back to front), each with its image's `left` and `top`, and the map's size, or None if no city has an image."""
+
+	cities = []
+	for checksum in checksums:
+		city = load_city(checksum)
+		if city and "error" not in city and (SC4MP_CITIES_PATH / f"{checksum}.png").exists():
+			city["checksum"] = checksum
+			cities.append(city)
+	if not cities:
+		return None
+
+	# Tiles without a city
+	covered = set((city["x"] + dx, city["y"] + dy) for city in cities for dx in range(city["size"]) for dy in range(city["size"]))
+	for x, y, size in tiles or []:
+		cells = set((x + dx, y + dy) for dx in range(size) for dy in range(size))
+		if not cells & covered:
+			cities.append({"x": x, "y": y, "size": size, "width": 128 * size + 2, "height": 64 * size + 21, "empty": True})
+			covered |= cells
+
+	# Position of each city's image. The image's left edge is the tile's left corner, and terrain higher than the tile's top corner makes the image taller
+	for city in cities:
+		top_x = city["x"] * SC4MP_MAP_X[0] + city["y"] * SC4MP_MAP_Y[0]
+		top_y = city["x"] * SC4MP_MAP_X[1] + city["y"] * SC4MP_MAP_Y[1]
+		city["left"] = top_x + city["size"] * SC4MP_MAP_Y[0]
+		city["top"] = top_y - (city["height"] - (64 * city["size"] + 21))
+
+	min_x = min(city["left"] for city in cities)
+	min_y = min(city["top"] for city in cities)
+	for city in cities:
+		city["left"] -= min_x
+		city["top"] -= min_y
+
+	width = max(city["left"] + city["width"] for city in cities)
+	height = max(city["top"] + city["height"] for city in cities)
+
+	return [cities[i] for i in region_map_order(cities)], width, height
+
+
+def city_outline(city):
+	"""The city's outline on the full size map, as a list of points: its tile, raised by its tallest terrain, down to the bottom of its edge."""
+
+	size = city["size"]
+	raised = city["height"] - (64 * size + 21)
+	left = (city["left"], city["top"] + raised + size * SC4MP_MAP_Y[1])	# the tile's corners, from its left corner
+	top = (left[0] - size * SC4MP_MAP_Y[0], left[1] - size * SC4MP_MAP_Y[1])
+	right = (top[0] + size * SC4MP_MAP_X[0], top[1] + size * SC4MP_MAP_X[1])
+	bottom = (left[0] + size * SC4MP_MAP_X[0], left[1] + size * SC4MP_MAP_X[1])
+	edge = 18	# the brown edge under the tile
+	return [(left[0], left[1] - raised), (top[0], top[1] - raised), (right[0], right[1] - raised), (right[0], right[1] + edge), (bottom[0], bottom[1] + edge), (left[0], left[1] + edge)]
+
+
+def render_region_map(checksums, width, tiles=None):
+	"""Assembles a region map from the cities' region view images, like SC4's region view, scaled to `width` pixels or less. The region's tiles without a city (from `read_region_config`) are drawn empty."""
+
+	layout = region_map_layout(checksums, tiles)
+	if layout is None:
+		return None
+	cities, full_width, full_height = layout
+
+	def median(colors, default):
+		colors = list(colors)
+		if not colors:
+			return default
+		return [sorted(color[i] for color in colors)[len(colors) // 2] for i in range(3)]
+
+	ground = median((city["ground"] for city in cities if city.get("ground") and city.get("snow", 0) < 0.1 and not city.get("blank")), [68, 76, 44])	# for the empty tiles
+
+	scale = min(1, width / full_width)
+	canvas = Image.new("RGBA", (max(1, round(full_width * scale)), max(1, round(full_height * scale))), (0, 0, 0, 0))
+
+	empty_tiles = {}
+	for city in cities:
+		if city.get("empty"):
+			if city["size"] not in empty_tiles:
+				empty_tiles[city["size"]] = empty_tile_image(city["size"], ground)
+			image = empty_tiles[city["size"]]
+			if scale < 1:
+				image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
+			canvas.alpha_composite(image, (round(city["left"] * scale), round(city["top"] * scale)))
+			continue
+		with Image.open(SC4MP_CITIES_PATH / f"{city['checksum']}.png") as image:
+			image = image.convert("RGBA")
+			if city.get("water"):	# only under cities with water, so eg. Mars doesn't get water in the gaps between its tiles
+				image = water_under(image, city, city["water"])
+			if scale < 1:
+				image = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
+			canvas.alpha_composite(image, (round(city["left"] * scale), round(city["top"] * scale)))
+
+	return canvas
 
 
 def show_error(e):
@@ -158,6 +588,184 @@ def get_server(server_id):
     return jsonify(server)
 
 
+@app.route("/servers/<server_id>/regions", methods=["GET"])
+def get_server_regions(server_id):
+
+	regions = sc4mp_scanner.region_maps.get(server_id)
+
+	if regions is None:
+		abort(404)
+
+	return jsonify({
+		region: {
+			"cities": len(checksums),
+			"ready": sum(1 for checksum in checksums if city_ready(checksum)),
+			"map": f"/servers/{urllib.parse.quote(server_id, safe='')}/regions/{urllib.parse.quote(region, safe='')}/map.png",
+			"map_cities": f"/servers/{urllib.parse.quote(server_id, safe='')}/regions/{urllib.parse.quote(region, safe='')}/map.json",
+		}
+		for region, checksums in regions.items()
+	})
+
+
+@app.route("/servers/<server_id>/regions/<region>/map.png", methods=["GET"])
+def get_region_map(server_id, region):
+
+	checksums = sc4mp_scanner.region_maps.get(server_id, {}).get(region)
+
+	if checksums is None:
+		abort(404)
+
+	if not sc4mp_has_pillow:
+		abort(503)
+
+	try:
+		requested_width = int(request.args.get("width", SC4MP_MAP_WIDTH))
+	except ValueError:
+		abort(400)
+
+	# Only render a few sizes, so requests for every width can't each make a new render and cache file
+	width = SC4MP_MAP_WIDTHS[-1]
+	for size in SC4MP_MAP_WIDTHS:
+		if requested_width <= size:
+			width = size
+			break
+
+	tiles = sc4mp_scanner.region_tiles.get(server_id, {}).get(region)
+
+	# Maps are cached until a city in the region changes
+	ready = sorted(checksum for checksum in checksums if city_cached(checksum))
+	key = hashlib.sha1(json.dumps([server_id, region, width]).encode()).hexdigest()[:16]
+	version = hashlib.sha1(json.dumps([ready, tiles]).encode()).hexdigest()[:16]
+	path = SC4MP_MAPS_PATH / f"{key}-{version}.png"
+
+	# One render of each map at a time, so requests for a map that isn't cached yet wait for the first one's render instead of each rendering it
+	with sc4mp_map_locks_lock:
+		lock = sc4mp_map_locks.setdefault(key, Lock())
+
+	with lock:
+		if not path.exists():
+			image = render_region_map(ready, width, tiles)
+			if image is None:
+				abort(404)
+			temp = path.with_name(path.name + f".{os.getpid()}.{random.randint(0, 1 << 30)}.tmp")
+			image.save(temp, format="PNG", optimize=True)
+			os.replace(temp, path)
+			for old in SC4MP_MAPS_PATH.glob(f"{key}-*.png"):	# older versions of this map
+				if old != path:
+					old.unlink(missing_ok=True)
+
+	return send_file(str(path.resolve()), mimetype="image/png", max_age=300)
+
+
+@app.route("/servers/<server_id>/regions/<region>/map.json", methods=["GET"])
+def get_region_map_cities(server_id, region):
+	"""Where each city is on the region map (its outline, as fractions of the map's width and height, front to back) and its stats, for showing city info over the map."""
+
+	checksums = sc4mp_scanner.region_maps.get(server_id, {}).get(region)
+
+	if checksums is None:
+		abort(404)
+
+	tiles = sc4mp_scanner.region_tiles.get(server_id, {}).get(region)
+	layout = region_map_layout([checksum for checksum in checksums if city_cached(checksum)], tiles)
+	if layout is None:
+		abort(404)
+	cities, width, height = layout
+
+	stats = sc4mp_scanner.region_cities.get(server_id, {}).get(region, {})
+
+	return jsonify({
+		"width": width,
+		"height": height,
+		"cities": [
+			dict(
+				{"x": city["x"], "y": city["y"], "size": city["size"], "city_name": city.get("city_name"), "mayor_name": city.get("mayor_name"), "checksum": city["checksum"], "city": f"/cities/{city['checksum']}"},
+				**stats.get(city["checksum"], {}),
+				outline=[[round(x / width, 5), round(y / height, 5)] for x, y in city_outline(city)],
+			)
+			for city in reversed(cities) if not city.get("empty")
+		],
+	})
+
+
+def city_info(checksum):
+	"""A city's public info from the city cache, and where it is (the servers and regions its savegame is in), or `None` if it isn't cached or couldn't be read."""
+
+	city = load_city(checksum)
+	if city is None or "error" in city:
+		return None
+
+	FIELDS = ["x", "y", "size", "city_name", "mayor_name", "residential_population", "commercial_population", "industrial_population", "mayor_rating", "difficulty", "gamemode", "total_funds"]
+
+	info = {"checksum": checksum}
+	for field in FIELDS:
+		info[field] = city.get(field)
+
+	# Older cache entries (from before city stats were kept) don't have the populations
+	if None not in (info["residential_population"], info["commercial_population"], info["industrial_population"]):
+		info["population"] = info["residential_population"] + info["commercial_population"] + info["industrial_population"]
+	else:
+		info["population"] = None
+
+	info["image"] = f"/cities/{checksum}/image.png"
+
+	info["locations"] = []
+	for server_id, regions in list(sc4mp_scanner.region_maps.items()):
+		for region, checksums in list(regions.items()):
+			if checksum in checksums:
+				info["locations"].append({"server_id": server_id, "region": region})
+
+	return info
+
+
+@app.route("/cities", methods=["GET"])
+def get_cities():
+	"""The cities on the servers the scanner has found, by their savegame's MD5."""
+
+	cities = []
+	seen = set()
+	for regions in list(sc4mp_scanner.region_maps.values()):
+		for checksums in list(regions.values()):
+			for checksum in checksums:
+				if checksum in seen:
+					continue
+				seen.add(checksum)
+				info = city_info(checksum)
+				if info is not None:
+					cities.append(info)
+
+	return jsonify(cities)
+
+
+@app.route("/cities/<checksum>", methods=["GET"])
+def get_city(checksum):
+
+	if not is_md5(checksum):
+		abort(404)
+
+	info = city_info(checksum)
+
+	if info is None:
+		abort(404)
+
+	return jsonify(info)
+
+
+@app.route("/cities/<checksum>/image.png", methods=["GET"])
+def get_city_image(checksum):
+	"""The city's image, as SC4 shows it in the region view."""
+
+	if not is_md5(checksum) or not city_ready(checksum):
+		abort(404)
+
+	path = SC4MP_CITIES_PATH / f"{checksum}.png"
+
+	if not path.exists():
+		abort(404)
+
+	return send_file(str(path.resolve()), mimetype="image/png", max_age=86400)	# a savegame's image never changes, since it's cached by the savegame's MD5
+
+
 class Scanner(Thread):
 
 
@@ -169,10 +777,77 @@ class Scanner(Thread):
 		self.MAX_THREADS = 50
 
 		self.new_servers = dict()
-		self.servers = self.new_servers
+		self.servers = dict()
 		self.server_queue = SC4MP_SERVERS.copy()
 		self.thread_count = 0
+		self.region_maps = {}	# savegame MD5s in each region, by server ID and region name
+		self.region_cities = {}	# each city's stats from the region's region.json, by server ID, region name and savegame MD5
+		self.region_tiles = {}	# each region's tiles from its config.bmp, by server ID and region name
+		self.download_lock = Lock()	# one server's files are downloaded at a time
 		self.end = False
+
+		self.load()
+
+
+	def load(self):
+		"""Loads the servers saved by the last run, so they're served while the scanner fetches them again."""
+
+		for path in SC4MP_SERVERS_PATH.glob("*.json"):
+			server_id = urllib.parse.unquote(path.stem)
+			try:
+				with open(path, encoding="utf-8") as file:
+					entry = json.load(file)
+				if server_expired(entry):
+					continue
+				self.servers[server_id] = entry
+				regions_path = SC4MP_REGIONS_PATH / path.name
+				if regions_path.exists():
+					with open(regions_path, encoding="utf-8") as file:
+						regions = json.load(file)
+					self.region_maps[server_id] = regions["maps"]
+					self.region_cities[server_id] = regions["cities"]
+					self.region_tiles[server_id] = regions["tiles"]
+			except Exception as e:
+				print(f"[WARNING] Failed to load the saved server \"{path.name}\": {e}")
+
+		print(f"Loaded {len(self.servers)} saved servers.")
+
+
+	def save(self, server_id, entry):
+		"""Saves a server (and its regions, for the region maps) to a local JSON file."""
+
+		filename = urllib.parse.quote(server_id, safe="") + ".json"	# server IDs come from the servers, so they're escaped to be safe as filenames
+
+		try:
+			write_atomic(SC4MP_SERVERS_PATH / filename, json.dumps(entry).encode())
+			if server_id in self.region_maps:
+				regions = {
+					"maps": self.region_maps.get(server_id, {}),
+					"cities": self.region_cities.get(server_id, {}),
+					"tiles": self.region_tiles.get(server_id, {}),
+				}
+				write_atomic(SC4MP_REGIONS_PATH / filename, json.dumps(regions).encode())
+		except Exception as e:
+			print(f"[WARNING] Failed to save server {server_id}: {e}")
+
+
+	def prune(self):
+		"""Deletes the saved servers that have expired, and the cached cities and region maps that haven't been used in as long."""
+
+		for path in SC4MP_SERVERS_PATH.glob("*.json"):
+			if urllib.parse.unquote(path.stem) not in self.servers:
+				path.unlink(missing_ok=True)
+				(SC4MP_REGIONS_PATH / path.name).unlink(missing_ok=True)
+
+		# Cached cities are touched each time a server still has them (see `_prune_file_table`)
+		expiry = time.time() - SC4MP_SERVER_EXPIRY * 24 * 60 * 60
+		for path in list(SC4MP_CITIES_PATH.glob("*.json")) + list(SC4MP_MAPS_PATH.glob("*.png")):
+			try:
+				if path.stat().st_mtime < expiry:
+					path.unlink(missing_ok=True)
+					path.with_suffix(".png").unlink(missing_ok=True)
+			except Exception:
+				pass
 
 
 	def run(self):
@@ -229,8 +904,7 @@ class Scanner(Thread):
 
 								for server_id, entry in self.servers.items():
 									# Drop servers that haven't responded in a while
-									updated = entry.get("updated")
-									if updated and datetime.utcnow() - datetime.strptime(updated, "%Y-%m-%d %H:%M:%S") > timedelta(days=SC4MP_SERVER_EXPIRY):
+									if server_expired(entry):
 										continue
 									self.new_servers.setdefault(server_id, entry)
 
@@ -245,6 +919,8 @@ class Scanner(Thread):
 								self.new_servers = dict()
 								self.server_queue = SC4MP_SERVERS.copy()
 								tried_servers = []
+
+								self.prune()
 
 								time.sleep(60) #300
 
@@ -306,6 +982,8 @@ class Scanner(Thread):
 						print(f"[WARNING] Server at {self.server[0]}:{self.server[1]} failed to get server ID, skipping.")
 						return
 
+					entry["server_id"] = server_id	# for the region map URLs
+
 					self.parent.new_servers.setdefault(server_id, entry)
 
 					# Fetch server data using appropriate protocol
@@ -313,12 +991,18 @@ class Scanner(Thread):
 						self.server_list_0_8()
 						entry["info"] = self.server_info_0_8()
 						if not entry["info"]["private"]:
-							entry["stats"] = self.server_stats_0_8(server_id)
+							with self.parent.download_lock:
+								entry["stats"] = self.server_stats_0_8(server_id)
 					else:
 						self.server_list()
 						entry["info"] = self.server_info()
 						if not entry["info"]["private"]:
-							entry["stats"] = self.server_stats(server_id)
+							with self.parent.download_lock:
+								entry["stats"] = self.server_stats(server_id)
+
+					# Served right away, instead of when the scan ends, and saved for after a restart
+					self.parent.servers[server_id] = entry
+					self.parent.save(server_id, entry)
 
 				except TimeoutError:
 
@@ -431,6 +1115,70 @@ class Scanner(Thread):
 			}
 
 
+		def _record_region_cities(self, temp_dir, server_id):
+			"""Keeps the public stats of each city in the downloaded regions' databases, by savegame MD5, for the region maps."""
+
+			FIELDS = ["city_name", "mayor_name", "population", "residential_population", "commercial_population", "industrial_population", "mayor_rating", "difficulty", "total_funds", "modified"]
+
+			regions_path = os.path.join(temp_dir, "Regions")
+			if not os.path.exists(regions_path):
+				return
+
+			regions = {}
+			tiles = {}
+			for region in os.listdir(regions_path):
+				try:
+					tiles[region] = read_region_config(os.path.join(regions_path, region, "config.bmp"))
+				except Exception:
+					pass
+				region_database = self._load_json(os.path.join(regions_path, region, "_Database", "region.json"))
+				cities = {}
+				for city_entry in region_database.values():
+					if isinstance(city_entry, dict) and is_md5(city_entry.get("hashcode")):
+						city = {field: city_entry.get(field) for field in FIELDS}
+						city["claimed"] = city_entry.get("owner") is not None
+						cities[city_entry["hashcode"]] = city
+				regions[region] = cities
+
+			self.parent.region_cities[server_id] = regions
+			self.parent.region_tiles[server_id] = tiles
+
+
+		def _prune_file_table(self, target, file_table, server_id):
+			"""Keeps the files needed for the stats (`region.json` and `config.bmp`), and the savegames not in the city cache yet, for the region maps (up to `SC4MP_MAP_DOWNLOAD_LIMIT` bytes per scan). Records the savegames in each region."""
+
+			ft = []
+			regions = {}
+			new_size = 0
+
+			for entry in file_table:
+				checksum, filesize, relpath = entry[0], entry[1], str(entry[2]).replace("\\", "/")
+				parts = relpath.split("/")
+				if parts[-1] in ["region.json", "config.bmp"]:
+					ft.append(entry)
+				elif target == "regions" and len(parts) == 2 and parts[1].lower().endswith(".sc4") and is_md5(checksum):
+					regions.setdefault(parts[0], []).append(checksum)
+					if city_cached(checksum):
+						os.utime(SC4MP_CITIES_PATH / f"{checksum}.json")	# still in use, so it isn't pruned
+					if not city_cached(checksum) and new_size + filesize <= SC4MP_MAP_DOWNLOAD_LIMIT:
+						ft.append(entry)
+						new_size += filesize
+
+			if target == "regions":
+				self.parent.region_maps[server_id] = regions
+
+			return ft
+
+
+		def _cache_city(self, path, checksum, filesize):
+
+			if str(path).lower().endswith(".sc4") and is_md5(checksum) and Path(path).stat().st_size == filesize:	# only complete downloads
+				try:
+					cache_city(path, checksum)
+				except Exception as e:
+					show_error(e)
+
+
 		# ===== PROTOCOL METHODS =====
 
 		def fetch(self):
@@ -486,12 +1234,7 @@ class Scanner(Thread):
 					size = sum([entry[1] for entry in file_table])
 
 					# Prune file table as necessary
-					ft = []
-					for entry in file_table:
-						filename = Path(entry[2]).name
-						if filename in ["region.json", "config.bmp"]:
-							ft.append(entry)
-					file_table = ft
+					file_table = self._prune_file_table(target, file_table, server_id)
 
 					# Download files
 					for checksum, filesize, relpath, file_data in s.file_table_data(target, file_table):
@@ -509,6 +1252,9 @@ class Scanner(Thread):
 						with d.open("wb") as dest:
 							for chunk in file_data:
 								dest.write(chunk)
+
+						# Keep savegames' region view images for the region maps
+						self._cache_city(d, checksum, filesize)
 
 					total_size += size
 
@@ -536,6 +1282,9 @@ class Scanner(Thread):
 
 			# Calculate region statistics
 			region_stats = self._calculate_region_stats(temp_dir, server_time)
+
+			# Keep each city's stats, for the region maps
+			self._record_region_cities(temp_dir, server_id)
 
 			# Build entry
 			entry = {
@@ -612,12 +1361,7 @@ class Scanner(Thread):
 					size = sum([entry[1] for entry in file_table])
 
 					# Prune file table as necessary
-					ft = []
-					for entry in file_table:
-						filename = Path(entry[2]).name
-						if filename in ["region.json", "config.bmp"]:
-							ft.append(entry)
-					file_table = ft
+					file_table = self._prune_file_table(request, file_table, server_id)
 
 					# Send pruned file table
 					send_json(s, file_table)
@@ -650,6 +1394,9 @@ class Scanner(Thread):
 								dest.write(bytes_read)
 								filesize_read += len(bytes_read)
 
+						# Keep savegames' region view images for the region maps
+						self._cache_city(d, entry[0], filesize)
+
 					total_size += size
 
 				return total_size, temp_dir
@@ -679,6 +1426,9 @@ class Scanner(Thread):
 
 			# Calculate region statistics
 			region_stats = self._calculate_region_stats(temp_dir, server_time)
+
+			# Keep each city's stats, for the region maps
+			self._record_region_cities(temp_dir, server_id)
 
 			# Build entry
 			entry = {
