@@ -72,7 +72,7 @@ One server, as a [server object](#server-object).
 | `info` | The server's info, as the server sends it. Fields depend on the server's version (for example `claim_duration`, `max_region_claims` and `godmode_filter` are missing on older servers, and newer ones may add more). `claim_duration` and `max_region_claims` are `null` for none. |
 | `stats` | Only for servers that aren't private. |
 | `stats.stat_mayors` | How many mayors have claimed a city. |
-| `stats.stat_mayors_online` | How many mayors saved a city in the last hour. |
+| `stats.stat_mayors_online` | How many players are online. Servers with chat report the players in game on the server (`info.players_online`); for other servers, it's how many mayors saved a city in the last hour. |
 | `stats.stat_claimed` | The share of the regions' area that's claimed, from `0` to `1`. |
 | `stats.stat_download` | The size of the server's plugins and regions, in bytes. |
 

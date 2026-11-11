@@ -1000,6 +1000,10 @@ class Scanner(Thread):
 							with self.parent.download_lock:
 								entry["stats"] = self.server_stats(server_id)
 
+					# Servers with chat count the players actually in game, which is better than the mayors who saved recently
+					if "stats" in entry and entry["info"].get("players_online") is not None:
+						entry["stats"]["stat_mayors_online"] = entry["info"]["players_online"]
+
 					# Served right away, instead of when the scan ends, and saved for after a restart
 					self.parent.servers[server_id] = entry
 					self.parent.save(server_id, entry)
